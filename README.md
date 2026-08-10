@@ -11,10 +11,12 @@ Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, 
 ## Features
 
 - **Optional API Keys**: no auth when `api_keys` is empty, OpenAI-style Bearer auth when configured
-- **OpenAI Compatible**: Drop-in replacement for `/v1/chat/completions` and `/v1/models`
+- **OpenAI Compatible**: Drop-in replacement for `/v1/chat/completions`, `/v1/images/generations`, and `/v1/models`
+- **Image Generation**: Standard `/v1/images/generations` endpoint powered by Imagen 3 (`imagen-3.0-generate-002`, `imagen-3`, `dall-e-3`, `dall-e-2`)
 - **Tool Calling**: Full function calling support (OpenAI format)
-- **Multiple Models**: Flash (3.6), Extended Thinking (20k+ char output), Pro, Auto, Lite
+- **Multiple Models**: Flash (3.6/3.5/2.5/2.0/1.5), Extended Thinking, Pro, Auto, Lite, Nano Banana (`nano-banana`)
 - **Thinking Depth**: Adjustable via `@think=N` suffix (0=deepest, 4=shallowest)
+- **Flexible Model Selection**: Choose model via JSON body `model`, `x-gemini-model` / `x-model` header, or `?model=...` query string
 - **Web Search**: Built-in internet access (Gemini's native search)
 - **Cross-Platform**: Pure Python, single optional dependency (`httpx` for streaming)
 - **Streaming**: SSE streaming support via `httpx`
@@ -40,6 +42,16 @@ Server starts at `http://localhost:8081/v1`.
 | API Key | any `api_keys` value from `config.json`; anything if not configured |
 | Model | `gemini-3.5-flash-thinking` |
 
+### Image Generation (`/v1/images/generations`)
+
+```bash
+curl http://localhost:8081/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"model":"imagen-3.0-generate-002","prompt":"A beautiful sunset over snowy mountains"}'
+```
+
+*(Note: Image generation requires a Google account cookie file configured via `cookie_file`)*
+
 ### curl
 
 #### bash / macOS / Linux
@@ -64,11 +76,20 @@ curl.exe --% http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: applica
 ```python
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8081/v1", api_key="sk-your-key")
+
+# Text completion
 resp = client.chat.completions.create(
     model="gemini-3.5-flash-thinking",
     messages=[{"role": "user", "content": "Explain quantum computing"}]
 )
 print(resp.choices[0].message.content)
+
+# Image generation (requires cookie)
+img_resp = client.images.generate(
+    model="imagen-3.0-generate-002",
+    prompt="A futuristic cyberpunk city at night"
+)
+print(img_resp.data[0].url)
 ```
 
 ### Gemini CLI
@@ -95,6 +116,10 @@ Supports Google native API endpoints:
 | `gemini-3.1-pro` | Advanced math & code (needs cookie) | ~12k chars |
 | `gemini-auto` | Auto model selection | varies |
 | `gemini-flash-lite` | Fastest answers, lightweight | ~10k chars |
+| `nano-banana` | Ultra-fast lightweight model alias | ~10k chars |
+| `imagen-3.0-generate-002` | Imagen 3 Image Generation model (needs cookie) | Image URL |
+| `imagen-3` | Alias for Imagen 3 | Image URL |
+| `dall-e-3` | OpenAI DALL-E 3 alias (routes to Imagen 3) | Image URL |
 
 ### Thinking Depth
 

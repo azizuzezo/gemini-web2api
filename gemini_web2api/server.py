@@ -1,14 +1,15 @@
-"""HTTP server: OpenAI-compatible API endpoints."""
 import json
 import time
 import uuid
 import re
+import urllib.parse
+import base64
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 from .config import CONFIG
 from .models import MODELS, resolve_model
-from .gemini import generate, generate_stream, log
+from .gemini import generate, generate_stream, generate_with_images, load_cookie, log
 from .tools import messages_to_prompt, parse_tool_calls, google_contents_to_prompt, parse_google_function_calls
 from .multimodal import upload_image, fetch_image_bytes
 from . import __version__
@@ -67,19 +68,32 @@ class GeminiHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError):
             return None
 
+    def _extract_requested_model(self, req: dict = None, default: str = None) -> str:
+        """Extract model selection from JSON body, headers, or query parameters."""
+        if default is None:
+            default = CONFIG["default_model"]
+        if req and isinstance(req, dict) and req.get("model"):
+            return req["model"]
+        for h in ("x-gemini-model", "x-model"):
+            val = self.headers.get(h)
+            if val:
+                return val.strip()
+        if "?" in self.path:
+            for pair in self.path.split("?", 1)[1].split("&"):
+                if pair.startswith("model=") and pair[6:]:
+                    return urllib.parse.unquote(pair[6:])
+        return default
+
     def _authorized(self):
         keys = CONFIG.get("api_keys") or []
         if not keys:
             return True
-        # Authorization: Bearer <key>
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer ") and auth[7:] in keys:
             return True
-        # header keys (OpenAI x-api-key / Google x-goog-api-key)
         for h in ("x-api-key", "x-goog-api-key"):
             if self.headers.get(h, "") in keys:
                 return True
-        # query param ?key= (Gemini CLI native style)
         if "?" in self.path:
             for pair in self.path.split("?", 1)[1].split("&"):
                 if pair.startswith("key=") and pair[4:] in keys:
@@ -128,6 +142,8 @@ class GeminiHandler(BaseHTTPRequestHandler):
                 self._handle_chat(body)
             elif self.path == "/v1/responses":
                 self._handle_responses(body)
+            elif self.path == "/v1/images/generations":
+                self._handle_images_generations(body)
             elif ":generateContent" in self.path:
                 self._handle_google_generate(body, stream=False)
             elif ":streamGenerateContent" in self.path:
@@ -143,6 +159,65 @@ class GeminiHandler(BaseHTTPRequestHandler):
             except:
                 pass
 
+    # ─── /v1/images/generations (Image Generation) ───────────────────────────
+
+    def _handle_images_generations(self, body: bytes):
+        req = self._parse_body(body)
+        if req is None:
+            self.send_json({"error": {"message": "invalid JSON"}}, 400)
+            return
+
+        prompt = req.get("prompt", "")
+        if not prompt or not prompt.strip():
+            self.send_json({"error": {"message": "empty prompt"}}, 400)
+            return
+
+        cookie_str, _ = load_cookie()
+        if not cookie_str:
+            self.send_json({
+                "error": {
+                    "message": "Gemini image generation requires a valid Google cookie. Please configure 'cookie_file' in config.json."
+                }
+            }, 400)
+            return
+
+        model_input = self._extract_requested_model(req, default="imagen-3.0-generate-002")
+        model_name, model_id, think_mode, err, extra_fields = resolve_model(model_input, default="imagen-3.0-generate-002")
+        if err:
+            self.send_json({"error": {"message": err}}, 400)
+            return
+
+        response_format = req.get("response_format", "url")
+        gen_prompt = prompt if any(k in prompt.lower() for k in ("generate", "draw", "create", "image")) else f"Generate an image: {prompt}"
+
+        try:
+            text, image_urls = generate_with_images(gen_prompt, model_id, think_mode, extra_fields=extra_fields)
+        except Exception as e:
+            self.send_json({"error": {"message": f"upstream error: {e}"}}, 502)
+            return
+
+        if not image_urls:
+            msg = text if text else "Gemini failed to generate an image."
+            self.send_json({"error": {"message": msg}}, 400)
+            return
+
+        data_items = []
+        for url in image_urls:
+            if response_format == "b64_json":
+                img_bytes = fetch_image_bytes(url)
+                if img_bytes:
+                    b64_str = base64.b64encode(img_bytes).decode("utf-8")
+                    data_items.append({"b64_json": b64_str})
+                else:
+                    data_items.append({"url": url})
+            else:
+                data_items.append({"url": url})
+
+        self.send_json({
+            "created": int(time.time()),
+            "data": data_items
+        })
+
     # ─── /v1/chat/completions ─────────────────────────────────────────────────
 
     def _handle_chat(self, body: bytes):
@@ -150,8 +225,8 @@ class GeminiHandler(BaseHTTPRequestHandler):
         if req is None:
             self.send_json({"error": {"message": "invalid JSON"}}, 400)
             return
-        model_name, model_id, think_mode, err, extra_fields = resolve_model(
-            req.get("model", CONFIG["default_model"]))
+        model_input = self._extract_requested_model(req)
+        model_name, model_id, think_mode, err, extra_fields = resolve_model(model_input)
         if err:
             self.send_json({"error": {"message": err}}, 400)
             return
@@ -220,8 +295,8 @@ class GeminiHandler(BaseHTTPRequestHandler):
         if req is None:
             self.send_json({"error": {"message": "invalid JSON"}}, 400)
             return
-        model_name, model_id, think_mode, err, extra_fields = resolve_model(
-            req.get("model", CONFIG["default_model"]))
+        model_input = self._extract_requested_model(req)
+        model_name, model_id, think_mode, err, extra_fields = resolve_model(model_input)
         if err:
             self.send_json({"error": {"message": err}}, 400)
             return
@@ -328,8 +403,9 @@ class GeminiHandler(BaseHTTPRequestHandler):
             self.send_json({"error": {"message": "invalid JSON"}}, 400)
             return
         m = re.match(r'/v1beta/models/([^:?]+)', self.path)
-        model_name = m.group(1) if m else CONFIG["default_model"]
-        model_name, model_id, think_mode, err, extra_fields = resolve_model(model_name)
+        path_model = m.group(1) if m else None
+        model_input = self._extract_requested_model(req, default=path_model)
+        model_name, model_id, think_mode, err, extra_fields = resolve_model(model_input)
         if err:
             self.send_json({"error": {"message": err}}, 400)
             return

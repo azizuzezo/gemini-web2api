@@ -77,13 +77,37 @@ MODELS = {
         "mode": 1, "think": 4,
         "desc": "Alias for gemini-3.6-flash (backend upgraded)",
     },
+    "gemini-2.5-flash": {
+        "mode": 1, "think": 4,
+        "desc": "Gemini 2.5 Flash model",
+    },
+    "gemini-2.0-flash": {
+        "mode": 1, "think": 4,
+        "desc": "Gemini 2.0 Flash model",
+    },
+    "gemini-1.5-flash": {
+        "mode": 1, "think": 4,
+        "desc": "Gemini 1.5 Flash model",
+    },
     "gemini-3.5-flash-thinking": {
         "mode": 2, "think": 0,
         "desc": "Deep thinking mode, longest output (~20k chars)",
     },
+    "gemini-2.0-flash-thinking-exp": {
+        "mode": 2, "think": 0,
+        "desc": "Experimental thinking mode",
+    },
     "gemini-3.1-pro": {
         "mode": 3, "think": 4,
         "desc": "Pro model (requires cookie for real routing)",
+    },
+    "gemini-1.5-pro": {
+        "mode": 3, "think": 4,
+        "desc": "Gemini 1.5 Pro model",
+    },
+    "gemini-3.1-pro-enhanced": {
+        "mode": 3, "think": 4, "extra": {31: 2, 80: 3},
+        "desc": "Pro with enhanced output (experimental)",
     },
     "gemini-auto": {
         "mode": 4, "think": 4,
@@ -97,7 +121,75 @@ MODELS = {
         "mode": 6, "think": 4,
         "desc": "Lightweight fast model",
     },
+    "imagen-3.0-generate-002": {
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "Imagen 3 Image Generation model",
+    },
+    "imagen-3": {
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "Alias for Imagen 3 Image Generation model",
+    },
+    "dall-e-3": {
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "OpenAI DALL-E 3 alias (routes to Imagen 3)",
+    },
+    "dall-e-2": {
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "OpenAI DALL-E 2 alias (routes to Imagen 3)",
+    },
+    "nano-banana": {
+        "mode": 6, "think": 4,
+        "desc": "Nano Banana lightweight fast model (Flash Lite alias)",
+    },
+    "nano_banana": {
+        "mode": 6, "think": 4,
+        "desc": "Alias for nano-banana",
+    },
 }
+
+
+def resolve_model(model_name: str, default: str = "gemini-3.6-flash"):
+    """Resolve model name to (name, mode_id, think_mode, error, extra_fields)."""
+    if not model_name:
+        model_name = default
+
+    think_override = None
+    if "@think=" in model_name:
+        model_name, think_str = model_name.rsplit("@think=", 1)
+        try:
+            think_override = int(think_str)
+        except ValueError:
+            return None, None, None, f"Invalid think level: {think_str}", None
+
+    cfg = MODELS.get(model_name)
+    if not cfg:
+        lower = model_name.lower()
+        if any(k in lower for k in ("imagen", "dall-e", "image-gen", "image_gen")):
+            matched = "imagen-3.0-generate-002"
+        elif any(k in lower for k in ("nano", "banana")):
+            matched = "nano-banana"
+        elif "thinking" in lower or "think" in lower:
+            matched = "gemini-3.5-flash-thinking"
+        elif "pro" in lower:
+            matched = "gemini-3.1-pro"
+        elif "lite" in lower:
+            matched = "gemini-flash-lite"
+        elif "auto" in lower:
+            matched = "gemini-auto"
+        elif "flash" in lower:
+            matched = "gemini-3.6-flash"
+        else:
+            matched = default
+
+        log(f"Model '{model_name}' mapped to '{matched}'")
+        model_name = matched
+        cfg = MODELS[matched]
+
+    mode_id = cfg["mode"]
+    think_mode = think_override if think_override is not None else cfg["think"]
+    extra = cfg.get("extra")
+    return model_name, mode_id, think_mode, None, extra
+
 
 # ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -392,8 +484,23 @@ def clean_gemini_text(text: str, strip: bool = True) -> str:
     return text.strip() if strip else text
 
 
-def extract_response_text(raw: str) -> str:
-    """Parse StreamGenerate response to extract final text."""
+def extract_image_urls_from_raw(raw: str) -> list:
+    """Extract generated image URLs (googleusercontent.com) from raw response."""
+    urls = []
+    pattern = r'https?://[a-zA-Z0-9\.\-]+googleusercontent\.com/[^\s"\'\]\)\}\\\>]+'
+    seen = set()
+    for match in re.finditer(pattern, raw):
+        url = match.group(0)
+        if any(ign in url for ign in ("fonts.gstatic", "default_avatar", "24px.svg")):
+            continue
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def extract_response_text_and_images(raw: str) -> tuple:
+    """Parse StreamGenerate response to get (final_text, list_of_image_urls)."""
     import re as _re
     bard_err = _re.search(r'BardErrorInfo\s*\[(\d+)\]', raw)
     if bard_err:
@@ -422,7 +529,29 @@ def extract_response_text(raw: str) -> str:
         if t.strip():
             text = t
             break
-    return clean_gemini_text(text)
+    text = clean_gemini_text(text)
+    image_urls = extract_image_urls_from_raw(raw)
+
+    if image_urls:
+        missing_imgs = [url for url in image_urls if url not in text]
+        if missing_imgs:
+            img_md = "\n\n" + "\n".join(f"![Generated Image]({url})" for url in missing_imgs)
+            text += img_md
+
+    return text, image_urls
+
+
+def extract_response_text(raw: str) -> str:
+    """Parse StreamGenerate response to extract final text."""
+    text, _ = extract_response_text_and_images(raw)
+    return text
+
+
+def generate_with_images(prompt: str, model_id: int, think_mode: int) -> tuple:
+    """Send prompt and return (text, image_urls)."""
+    raw = gemini_stream_generate(prompt, model_id, think_mode)
+    return extract_response_text_and_images(raw)
+
 
 
 # ─── OpenAI Format Helpers ───────────────────────────────────────────────────
@@ -513,19 +642,38 @@ class GeminiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _parse_body(self, body: bytes) -> dict:
+        try:
+            return json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    def _extract_requested_model(self, req: dict = None, default: str = None) -> str:
+        """Extract model selection from JSON body, headers, or query parameters."""
+        if default is None:
+            default = CONFIG["default_model"]
+        if req and isinstance(req, dict) and req.get("model"):
+            return req["model"]
+        for h in ("x-gemini-model", "x-model"):
+            val = self.headers.get(h)
+            if val:
+                return val.strip()
+        if "?" in self.path:
+            for pair in self.path.split("?", 1)[1].split("&"):
+                if pair.startswith("model=") and pair[6:]:
+                    return urllib.parse.unquote(pair[6:])
+        return default
+
     def _authorized(self):
         keys = CONFIG.get("api_keys") or []
         if not keys:
             return True
-        # Authorization: Bearer <key>
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer ") and auth[7:] in keys:
             return True
-        # header keys (OpenAI x-api-key / Google x-goog-api-key)
         for h in ("x-api-key", "x-goog-api-key"):
             if self.headers.get(h, "") in keys:
                 return True
-        # query param ?key= (Gemini CLI native style)
         if "?" in self.path:
             for pair in self.path.split("?", 1)[1].split("&"):
                 if pair.startswith("key=") and pair[4:] in keys:
@@ -573,6 +721,8 @@ class GeminiHandler(BaseHTTPRequestHandler):
                 self.handle_chat(body)
             elif self.path == "/v1/responses":
                 self.handle_responses(body)
+            elif self.path == "/v1/images/generations":
+                self._handle_images_generations(body)
             elif ":generateContent" in self.path:
                 self._handle_google_generate(body, stream=False)
             elif ":streamGenerateContent" in self.path:
@@ -588,15 +738,50 @@ class GeminiHandler(BaseHTTPRequestHandler):
             except:
                 pass
 
-    def _resolve_model(self, model_name):
-        think_override = None
-        if "@think=" in model_name:
-            model_name, think_str = model_name.rsplit("@think=", 1)
-            think_override = int(think_str)
-        cfg = MODELS.get(model_name)
-        if not cfg:
-            return None, None, None, f"Unknown model: {model_name}"
-        return model_name, cfg["mode"], (think_override if think_override is not None else cfg["think"]), None
+    def _handle_images_generations(self, body: bytes):
+        req = self._parse_body(body)
+        if req is None:
+            self.send_json({"error": {"message": "invalid JSON"}}, 400)
+            return
+
+        prompt = req.get("prompt", "")
+        if not prompt or not prompt.strip():
+            self.send_json({"error": {"message": "empty prompt"}}, 400)
+            return
+
+        cookie_str, _ = load_cookie()
+        if not cookie_str:
+            self.send_json({
+                "error": {
+                    "message": "Gemini image generation requires a valid Google cookie. Please configure 'cookie_file' in config.json."
+                }
+            }, 400)
+            return
+
+        model_input = self._extract_requested_model(req, default="imagen-3.0-generate-002")
+        model_name, model_id, think_mode, err, extra_fields = resolve_model(model_input, default="imagen-3.0-generate-002")
+        if err:
+            self.send_json({"error": {"message": err}}, 400)
+            return
+
+        gen_prompt = prompt if any(k in prompt.lower() for k in ("generate", "draw", "create", "image")) else f"Generate an image: {prompt}"
+
+        try:
+            text, image_urls = generate_with_images(gen_prompt, model_id, think_mode)
+        except Exception as e:
+            self.send_json({"error": {"message": f"upstream error: {e}"}}, 502)
+            return
+
+        if not image_urls:
+            msg = text if text else "Gemini failed to generate an image."
+            self.send_json({"error": {"message": msg}}, 400)
+            return
+
+        data_items = [{"url": url} for url in image_urls]
+        self.send_json({
+            "created": int(time.time()),
+            "data": data_items
+        })
 
     def _call_gemini(self, prompt, model_id, think_mode, tools):
         raw = gemini_stream_generate(prompt, model_id, think_mode)
@@ -607,9 +792,9 @@ class GeminiHandler(BaseHTTPRequestHandler):
         return text or "", tool_calls
 
     def handle_chat(self, body: bytes):
-        req = json.loads(body)
-        model_name, model_id, think_mode, err = self._resolve_model(
-            req.get("model", CONFIG["default_model"]))
+        req = self._parse_body(body) or {}
+        model_input = self._extract_requested_model(req)
+        model_name, model_id, think_mode, err, extra_fields = resolve_model(model_input)
         if err:
             self.send_json({"error": {"message": err}}, 400)
             return
@@ -686,9 +871,9 @@ class GeminiHandler(BaseHTTPRequestHandler):
 
     def handle_responses(self, body: bytes):
         """OpenAI Responses API for Codex CLI compatibility."""
-        req = json.loads(body)
-        model_name, model_id, think_mode, err = self._resolve_model(
-            req.get("model", CONFIG["default_model"]))
+        req = self._parse_body(body) or {}
+        model_input = self._extract_requested_model(req)
+        model_name, model_id, think_mode, err, extra_fields = resolve_model(model_input)
         if err:
             self.send_json({"error": {"message": err}}, 400)
             return

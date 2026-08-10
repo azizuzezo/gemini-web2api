@@ -152,8 +152,22 @@ def clean_text(text: str, strip: bool = True) -> str:
         r'```(?:python|javascript|text)\?code_(?:reference|stdout)&code_event_index=\d+\n.*?```\n?',
         '', text, flags=re.DOTALL
     )
-    text = re.sub(r'http://googleusercontent\.com/card_content/\d+\n?', '', text)
     return text.strip() if strip else text
+
+
+def extract_image_urls_from_raw(raw: str) -> list:
+    """Extract generated image URLs (googleusercontent.com) from raw response."""
+    urls = []
+    pattern = r'https?://[a-zA-Z0-9\.\-]+googleusercontent\.com/[^\s"\'\]\)\}\\\>]+'
+    seen = set()
+    for match in re.finditer(pattern, raw):
+        url = match.group(0)
+        if any(ign in url for ign in ("fonts.gstatic", "default_avatar", "24px.svg")):
+            continue
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
 
 
 def _extract_texts_from_line(line: str) -> list:
@@ -179,8 +193,8 @@ def _extract_texts_from_line(line: str) -> list:
         return []
 
 
-def extract_response_text(raw: str) -> str:
-    """Parse full response to get final text."""
+def extract_response_text_and_images(raw: str) -> tuple:
+    """Parse full response to get (final_text, list_of_image_urls)."""
     bard_err = re.search(r'BardErrorInfo\s*\[(\d+)\]', raw)
     if bard_err:
         raise RuntimeError(f"Gemini upstream rejected request: BardErrorInfo [{bard_err.group(1)}]")
@@ -189,11 +203,27 @@ def extract_response_text(raw: str) -> str:
         for t in _extract_texts_from_line(line):
             if len(t) > len(last_text):
                 last_text = t
-    return clean_text(last_text)
+
+    text = clean_text(last_text)
+    image_urls = extract_image_urls_from_raw(raw)
+
+    if image_urls:
+        missing_imgs = [url for url in image_urls if url not in text]
+        if missing_imgs:
+            img_md = "\n\n" + "\n".join(f"![Generated Image]({url})" for url in missing_imgs)
+            text += img_md
+
+    return text, image_urls
 
 
-def generate(prompt: str, model_id: int, think_mode: int, file_refs: list = None, extra_fields: dict = None) -> str:
-    """Non-streaming generation with retry."""
+def extract_response_text(raw: str) -> str:
+    """Parse full response to get final text."""
+    text, _ = extract_response_text_and_images(raw)
+    return text
+
+
+def generate_with_images(prompt: str, model_id: int, think_mode: int, file_refs: list = None, extra_fields: dict = None) -> tuple:
+    """Non-streaming generation returning (text, image_urls)."""
     body = _build_payload(prompt, model_id, think_mode, file_refs, extra_fields).encode()
     url = _get_url()
     headers = _build_headers()
@@ -213,13 +243,19 @@ def generate(prompt: str, model_id: int, think_mode: int, file_refs: list = None
             else:
                 resp = urllib.request.urlopen(req, context=ctx, timeout=CONFIG["request_timeout_sec"])
             raw = resp.read().decode("utf-8", errors="replace")
-            return extract_response_text(raw)
+            return extract_response_text_and_images(raw)
         except Exception as e:
             last_err = e
             if attempt < CONFIG["retry_attempts"] - 1:
                 log(f"Retry {attempt+1}/{CONFIG['retry_attempts']}: {e}")
                 time.sleep(CONFIG["retry_delay_sec"])
     raise last_err
+
+
+def generate(prompt: str, model_id: int, think_mode: int, file_refs: list = None, extra_fields: dict = None) -> str:
+    """Non-streaming generation with retry."""
+    text, _ = generate_with_images(prompt, model_id, think_mode, file_refs, extra_fields)
+    return text
 
 
 def generate_stream(prompt: str, model_id: int, think_mode: int, file_refs: list = None, extra_fields: dict = None):
