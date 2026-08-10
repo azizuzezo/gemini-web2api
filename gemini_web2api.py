@@ -145,6 +145,14 @@ MODELS = {
         "mode": 6, "think": 4,
         "desc": "Alias for nano-banana",
     },
+    "nano-banana-2": {
+        "mode": 6, "think": 4,
+        "desc": "Nano Banana 2.0 lightweight ultra-fast model",
+    },
+    "nano_banana_2": {
+        "mode": 6, "think": 4,
+        "desc": "Alias for nano-banana-2",
+    },
 }
 
 
