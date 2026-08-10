@@ -21,6 +21,21 @@ DEFAULT_CONFIG = {
 CONFIG = dict(DEFAULT_CONFIG)
 
 
+def parse_env_api_keys():
+    env_keys = os.environ.get("API_KEYS") or os.environ.get("API_KEY")
+    if not env_keys:
+        return []
+    env_keys = env_keys.strip()
+    if env_keys.startswith("["):
+        try:
+            parsed = json.loads(env_keys)
+            if isinstance(parsed, list):
+                return [str(k).strip() for k in parsed if str(k).strip()]
+        except Exception:
+            pass
+    return [k.strip() for k in env_keys.split(",") if k.strip()]
+
+
 def load_config(path: str = None):
     """Load config from JSON file."""
     if path and os.path.exists(path):
@@ -31,6 +46,9 @@ def load_config(path: str = None):
             CONFIG["port"] = int(os.environ["PORT"])
         except ValueError:
             pass
+    env_keys = parse_env_api_keys()
+    if env_keys:
+        CONFIG["api_keys"] = env_keys
     return CONFIG
 
 
@@ -39,6 +57,9 @@ if os.environ.get("PORT"):
         CONFIG["port"] = int(os.environ["PORT"])
     except ValueError:
         pass
+env_keys = parse_env_api_keys()
+if env_keys:
+    CONFIG["api_keys"] = env_keys
 
 
 def find_config():

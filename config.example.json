@@ -9,7 +9,9 @@
   "xsrf_token": null,
   "default_model": "gemini-3.6-flash",
   "api_keys": [
-    "sk-gemini"
+    "sk-muter-muter",
+    "sk-muter-keenan",
+    "muter-9Kx31Jd2Pq"
   ],
   "cookie_file": null,
   "proxy": null,

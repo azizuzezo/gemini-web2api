@@ -88,15 +88,16 @@ class GeminiHandler(BaseHTTPRequestHandler):
         keys = CONFIG.get("api_keys") or []
         if not keys:
             return True
-        auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and auth[7:] in keys:
+        auth = self.headers.get("Authorization", "").strip()
+        if auth.startswith("Bearer ") and auth[7:].strip() in keys:
             return True
         for h in ("x-api-key", "x-goog-api-key"):
-            if self.headers.get(h, "") in keys:
+            val = self.headers.get(h, "").strip()
+            if val and val in keys:
                 return True
         if "?" in self.path:
             for pair in self.path.split("?", 1)[1].split("&"):
-                if pair.startswith("key=") and pair[4:] in keys:
+                if pair.startswith("key=") and pair[4:].strip() in keys:
                     return True
         return False
 

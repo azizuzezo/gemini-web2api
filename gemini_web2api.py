@@ -668,15 +668,16 @@ class GeminiHandler(BaseHTTPRequestHandler):
         keys = CONFIG.get("api_keys") or []
         if not keys:
             return True
-        auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and auth[7:] in keys:
+        auth = self.headers.get("Authorization", "").strip()
+        if auth.startswith("Bearer ") and auth[7:].strip() in keys:
             return True
         for h in ("x-api-key", "x-goog-api-key"):
-            if self.headers.get(h, "") in keys:
+            val = self.headers.get(h, "").strip()
+            if val and val in keys:
                 return True
         if "?" in self.path:
             for pair in self.path.split("?", 1)[1].split("&"):
-                if pair.startswith("key=") and pair[4:] in keys:
+                if pair.startswith("key=") and pair[4:].strip() in keys:
                     return True
         return False
 
@@ -1084,11 +1085,29 @@ class GeminiHandler(BaseHTTPRequestHandler):
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
+def parse_env_api_keys():
+    env_keys = os.environ.get("API_KEYS") or os.environ.get("API_KEY")
+    if not env_keys:
+        return []
+    env_keys = env_keys.strip()
+    if env_keys.startswith("["):
+        try:
+            parsed = json.loads(env_keys)
+            if isinstance(parsed, list):
+                return [str(k).strip() for k in parsed if str(k).strip()]
+        except Exception:
+            pass
+    return [k.strip() for k in env_keys.split(",") if k.strip()]
+
+
 def load_config(path: str):
     if path and os.path.exists(path):
         with open(path) as f:
             CONFIG.update(json.load(f))
         log(f"Config loaded: {path}")
+    env_keys = parse_env_api_keys()
+    if env_keys:
+        CONFIG["api_keys"] = env_keys
 
 
 def main():
