@@ -137,21 +137,21 @@ MODELS = {
         "mode": 1, "think": 4, "is_image": True,
         "desc": "OpenAI DALL-E 2 alias (routes to Imagen 3)",
     },
-    "nano-banana": {
-        "mode": 6, "think": 4,
-        "desc": "Nano Banana lightweight fast model (Flash Lite alias)",
-    },
-    "nano_banana": {
-        "mode": 6, "think": 4,
-        "desc": "Alias for nano-banana",
-    },
     "nano-banana-2": {
-        "mode": 6, "think": 4,
-        "desc": "Nano Banana 2.0 lightweight ultra-fast model",
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "Nano Banana 2 (Gemini 3.1 Flash Image model)",
     },
     "nano_banana_2": {
-        "mode": 6, "think": 4,
+        "mode": 1, "think": 4, "is_image": True,
         "desc": "Alias for nano-banana-2",
+    },
+    "nano-banana": {
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "Nano Banana Image Generation model",
+    },
+    "nano_banana": {
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "Alias for nano-banana",
     },
 }
 
