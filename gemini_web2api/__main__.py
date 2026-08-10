@@ -4,7 +4,7 @@ import os
 
 from .config import CONFIG, load_config, find_config
 from .models import MODELS
-from .gemini import HAS_HTTPX
+from .gemini import HAS_HTTPX, fetch_latest_bl
 from .server import GeminiHandler, ThreadedServer
 from . import __version__
 
@@ -24,10 +24,20 @@ def main():
 
     if args.port:
         CONFIG["port"] = args.port
+    elif os.environ.get("PORT"):
+        try:
+            CONFIG["port"] = int(os.environ["PORT"])
+        except ValueError:
+            pass
+
     if args.cookie_file:
         CONFIG["cookie_file"] = args.cookie_file
     if args.proxy:
         CONFIG["proxy"] = args.proxy
+
+    new_bl = fetch_latest_bl()
+    if new_bl:
+        CONFIG["gemini_bl"] = new_bl
 
     port = CONFIG["port"]
     server = ThreadedServer((CONFIG["host"], port), GeminiHandler)
@@ -38,12 +48,14 @@ def main():
     print(f"  Cookie:    {'yes' if CONFIG.get('cookie_file') else 'none (anonymous)'}")
     print(f"  Proxy:     {CONFIG.get('proxy') or 'system env'}")
     print(f"  Streaming: {'httpx (true streaming)' if HAS_HTTPX else 'urllib (buffered)'}")
+    print(f"  BL:        {CONFIG.get('gemini_bl')}")
     print()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
         server.shutdown()
+
 
 
 if __name__ == "__main__":

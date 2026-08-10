@@ -26,7 +26,19 @@ def load_config(path: str = None):
     if path and os.path.exists(path):
         with open(path) as f:
             CONFIG.update(json.load(f))
+    if os.environ.get("PORT"):
+        try:
+            CONFIG["port"] = int(os.environ["PORT"])
+        except ValueError:
+            pass
     return CONFIG
+
+
+if os.environ.get("PORT"):
+    try:
+        CONFIG["port"] = int(os.environ["PORT"])
+    except ValueError:
+        pass
 
 
 def find_config():
@@ -35,3 +47,4 @@ def find_config():
         if os.path.exists(p):
             return p
     return None
+
