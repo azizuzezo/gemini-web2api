@@ -1136,6 +1136,9 @@ def load_config(path: str):
     if env_keys:
         CONFIG["api_keys"] = env_keys
 
+    if os.environ.get("GEMINI_BL"):
+        CONFIG["gemini_bl"] = os.environ["GEMINI_BL"].strip()
+
     if os.environ.get("DEFAULT_MODEL"):
         CONFIG["default_model"] = os.environ["DEFAULT_MODEL"].strip()
 
