@@ -1,4 +1,5 @@
 """Configuration management."""
+
 import json
 import os
 
@@ -37,18 +38,35 @@ def parse_env_api_keys():
 
 
 def load_config(path: str = None):
-    """Load config from JSON file."""
+    """Load config from JSON and override with environment variables."""
+
+    # Load config.json terlebih dahulu
     if path and os.path.exists(path):
-        with open(path) as f:
+        with open(path, "r", encoding="utf-8") as f:
             CONFIG.update(json.load(f))
+
+    # ==========================================
+    # RAILWAY ENVIRONMENT VARIABLES
+    # ==========================================
+
     if os.environ.get("PORT"):
         try:
             CONFIG["port"] = int(os.environ["PORT"])
         except ValueError:
             pass
+
     env_keys = parse_env_api_keys()
     if env_keys:
         CONFIG["api_keys"] = env_keys
+
+    env_model = os.environ.get("DEFAULT_MODEL", "").strip()
+    if env_model:
+        CONFIG["default_model"] = env_model
+
+    env_proxy = os.environ.get("HTTPS_PROXY", "").strip()
+    if env_proxy:
+        CONFIG["proxy"] = env_proxy
+
     return CONFIG
 
 
@@ -64,8 +82,13 @@ if env_keys:
 
 def find_config():
     """Search for config file in standard locations."""
-    for p in ["./config.json", os.path.expanduser("~/.config/gemini-web2api/config.json")]:
+
+    for p in [
+        "./config.json",
+        os.path.expanduser("~/.config/gemini-web2api/config.json"),
+    ]:
         if os.path.exists(p):
             return p
+
     return None
 

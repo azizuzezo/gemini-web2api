@@ -1131,9 +1131,23 @@ def load_config(path: str):
         with open(path) as f:
             CONFIG.update(json.load(f))
         log(f"Config loaded: {path}")
+
     env_keys = parse_env_api_keys()
     if env_keys:
         CONFIG["api_keys"] = env_keys
+
+    if os.environ.get("DEFAULT_MODEL"):
+        CONFIG["default_model"] = os.environ["DEFAULT_MODEL"].strip()
+
+    if os.environ.get("LOG_REQUESTS"):
+        CONFIG["log_requests"] = os.environ["LOG_REQUESTS"].strip().lower() == "true"
+
+    if os.environ.get("TEMPORARY_CHATS"):
+        CONFIG["temporary_chats"] = os.environ["TEMPORARY_CHATS"].strip().lower() == "true"
+
+    env_proxy = os.environ.get("HTTPS_PROXY", "").strip()
+    if env_proxy:
+        CONFIG["proxy"] = env_proxy
 
 
 def main():
