@@ -51,10 +51,10 @@ DEFAULT_CONFIG = {
     "retry_attempts": 3,
     "retry_delay_sec": 2,
     "request_timeout_sec": 180,
-    "gemini_bl": "boq_assistant-bard-web-server_20260716.08_p0",
+    "gemini_bl": "boq_assistant-bard-web-server_20260825.12_p0",
     "auth_user": None,
     "xsrf_token": None,
-    "default_model": "gemini-3.6-flash",
+    "default_model": "gemini-3.7-flash",
     "log_requests": True,
     "cookie_file": None,
     "proxy": None,
@@ -69,13 +69,17 @@ CONFIG = dict(DEFAULT_CONFIG)
 #   1=FAST, 2=THINKING, 3=PRO, 4=AUTO, 5=FAST_DYNAMIC_THINKING, 6=FLASH_LITE
 
 MODELS = {
+    "gemini-3.7-flash": {
+        "mode": 1, "think": 4,
+        "desc": "Latest all-around model (Gemini 3.7 Flash, confirmed current default of the 'Flash' category as of 2026-08)",
+    },
     "gemini-3.6-flash": {
         "mode": 1, "think": 4,
-        "desc": "Latest all-around model (Gemini 3.6 Flash)",
+        "desc": "Alias for gemini-3.7-flash (backend upgraded)",
     },
     "gemini-3.5-flash": {
         "mode": 1, "think": 4,
-        "desc": "Alias for gemini-3.6-flash (backend upgraded)",
+        "desc": "Alias for gemini-3.7-flash (backend upgraded)",
     },
     "gemini-2.5-flash": {
         "mode": 1, "think": 4,
@@ -156,7 +160,7 @@ MODELS = {
 }
 
 
-def resolve_model(model_name: str, default: str = "gemini-3.6-flash"):
+def resolve_model(model_name: str, default: str = "gemini-3.7-flash"):
     """Resolve model name to (name, mode_id, think_mode, error, extra_fields)."""
     if not model_name:
         model_name = default
@@ -207,28 +211,42 @@ def log(msg: str):
         sys.stderr.flush()
 
 
+def _parse_cookie_content(content: str) -> tuple:
+    """Parse cookie content (JSON {"cookie":...,"sapisid":...} or a raw 'K=V; ...' string)."""
+    content = content.strip()
+    if content.startswith("{"):
+        data = json.loads(content)
+        cookie_str = data.get("cookie", "")
+        sapisid = data.get("sapisid", "")
+    else:
+        cookie_str = content
+        pairs = dict(p.split("=", 1) for p in cookie_str.split("; ") if "=" in p)
+        sapisid = pairs.get("SAPISID", "")
+    return cookie_str, sapisid if sapisid else None
+
+
 def load_cookie() -> tuple:
-    """Load cookie from file. Returns (cookie_str, sapisid)."""
+    """Load cookie from file, falling back to the GEMINI_COOKIE env var. Returns (cookie_str, sapisid)."""
     cookie_file = CONFIG.get("cookie_file")
-    if not cookie_file:
-        return "", None
-    if not os.path.exists(cookie_file):
-        return "", None
-    try:
-        with open(cookie_file, "r") as f:
-            content = f.read().strip()
-        if content.startswith("{"):
-            data = json.loads(content)
-            cookie_str = data.get("cookie", "")
-            sapisid = data.get("sapisid", "")
-        else:
-            cookie_str = content
-            pairs = dict(p.split("=", 1) for p in cookie_str.split("; ") if "=" in p)
-            sapisid = pairs.get("SAPISID", "")
-        return cookie_str, sapisid if sapisid else None
-    except Exception as e:
-        log(f"Cookie load error: {e}")
-        return "", None
+    if cookie_file and os.path.exists(cookie_file):
+        try:
+            with open(cookie_file, "r") as f:
+                content = f.read()
+            return _parse_cookie_content(content)
+        except Exception as e:
+            log(f"Cookie load error: {e}")
+            return "", None
+
+    env_cookie = os.environ.get("GEMINI_COOKIE")
+    if env_cookie:
+        try:
+            cookie_str, sapisid = _parse_cookie_content(env_cookie)
+            return cookie_str, os.environ.get("GEMINI_SAPISID") or sapisid
+        except Exception as e:
+            log(f"GEMINI_COOKIE env parse error: {e}")
+            return "", None
+
+    return "", None
 
 
 def make_sapisidhash(sapisid: str) -> str:
@@ -446,7 +464,7 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
                     buf += chunk
                     if "BardErrorInfo" in buf:
                         import re as _re
-                        m = _re.search(r'BardErrorInfo\s*\[(\d+)\]', buf)
+                        m = _re.search(r'BardErrorInfo["\s,]*\[(\d+)\]', buf)
                         if m:
                             raise RuntimeError(f"Gemini upstream rejected request: BardErrorInfo [{m.group(1)}]")
                     while "\n" in buf:
@@ -510,7 +528,7 @@ def extract_image_urls_from_raw(raw: str) -> list:
 def extract_response_text_and_images(raw: str) -> tuple:
     """Parse StreamGenerate response to get (final_text, list_of_image_urls)."""
     import re as _re
-    bard_err = _re.search(r'BardErrorInfo\s*\[(\d+)\]', raw)
+    bard_err = _re.search(r'BardErrorInfo["\s,]*\[(\d+)\]', raw)
     if bard_err:
         raise RuntimeError(f"Gemini upstream rejected request: BardErrorInfo [{bard_err.group(1)}]")
     texts = []
