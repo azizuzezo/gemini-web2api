@@ -32,6 +32,9 @@ import os
 import hashlib
 import argparse
 import base64
+import threading
+import random
+import itertools
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -60,9 +63,38 @@ DEFAULT_CONFIG = {
     "proxy": None,
     "api_keys": [],
     "temporary_chats": False,
+    "max_concurrent_requests": 3,
 }
 
 CONFIG = dict(DEFAULT_CONFIG)
+
+# Caps how many requests are in-flight to Gemini's backend at once. Extra
+# requests queue here instead of firing in parallel, since bursts of
+# simultaneous requests are what trip Google's rate limiting (429s cascading
+# into 502s), not the total requests-per-minute on their own.
+_upstream_semaphore = threading.BoundedSemaphore(max(1, CONFIG["max_concurrent_requests"]))
+_reqid_lock = threading.Lock()
+_reqid_counter = itertools.count(int(time.time()) % 1000000)
+
+
+def next_reqid() -> int:
+    """Monotonically increasing _reqid, safe under concurrent requests.
+
+    Plain int(time.time()) % 1_000_000 gives two requests in the same
+    wall-clock second an identical _reqid, which the backend can reject.
+    """
+    with _reqid_lock:
+        return next(_reqid_counter) % 1000000
+
+
+def retry_sleep_sec(attempt: int, err: Exception = None) -> float:
+    """Exponential backoff with jitter; extra cautious on 429s so concurrent
+    retrying threads spread out instead of hammering the same window again."""
+    status = getattr(err, "code", None) or getattr(getattr(err, "response", None), "status_code", None)
+    base = CONFIG["retry_delay_sec"] * (2 ** attempt)
+    if status == 429:
+        base *= 3
+    return min(base + random.uniform(0, CONFIG["retry_delay_sec"]), 30)
 
 # ─── Models ──────────────────────────────────────────────────────────────────
 # Mapping from JS source: MODE_CATEGORY enum (028-6eb337387583.js)
@@ -309,7 +341,16 @@ def update_bl_if_needed() -> bool:
 # ─── Gemini Protocol ─────────────────────────────────────────────────────────
 
 def gemini_stream_generate(prompt: str, model_id: int, think_mode: int) -> str:
-    """Send prompt to Gemini StreamGenerate with retry."""
+    """Send prompt to Gemini StreamGenerate with retry (acquires the upstream semaphore)."""
+    with _upstream_semaphore:
+        return _gemini_stream_generate_locked(prompt, model_id, think_mode)
+
+
+def _gemini_stream_generate_locked(prompt: str, model_id: int, think_mode: int) -> str:
+    """Same as gemini_stream_generate, but assumes the caller already holds
+    _upstream_semaphore. Only call this from a caller that already holds it
+    (e.g. the 405 fallback in gemini_stream_generate_iter) -- acquiring the
+    semaphore again from the same thread would deadlock at concurrency 1."""
     inner = [None] * 80
     inner[0] = [prompt, 0, None, None, None, None, 0]
     inner[1] = ["en"]
@@ -334,7 +375,7 @@ def gemini_stream_generate(prompt: str, model_id: int, think_mode: int) -> str:
     if CONFIG.get("xsrf_token"):
         params["at"] = CONFIG["xsrf_token"]
     body = urllib.parse.urlencode(params).encode()
-    reqid = int(time.time()) % 1000000
+    reqid = next_reqid()
     prefix = account_prefix()
     url = (
         f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
@@ -374,7 +415,7 @@ def gemini_stream_generate(prompt: str, model_id: int, think_mode: int) -> str:
             return resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as e:
             if e.code == 405 and update_bl_if_needed():
-                reqid = int(time.time()) % 1000000
+                reqid = next_reqid()
                 url = (
                     f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
                     "assistant.lamda.BardFrontendService/StreamGenerate"
@@ -385,13 +426,15 @@ def gemini_stream_generate(prompt: str, model_id: int, think_mode: int) -> str:
                 continue
             last_err = e
             if attempt < CONFIG["retry_attempts"] - 1:
-                log(f"Retry {attempt+1}/{CONFIG['retry_attempts']}: {e}")
-                time.sleep(CONFIG["retry_delay_sec"])
+                delay = retry_sleep_sec(attempt, e)
+                log(f"Retry {attempt+1}/{CONFIG['retry_attempts']}: HTTP Error {e.code}: {e.reason} (waiting {delay:.1f}s)")
+                time.sleep(delay)
         except Exception as e:
             last_err = e
             if attempt < CONFIG["retry_attempts"] - 1:
-                log(f"Retry {attempt+1}/{CONFIG['retry_attempts']}: {e}")
-                time.sleep(CONFIG["retry_delay_sec"])
+                delay = retry_sleep_sec(attempt, e)
+                log(f"Retry {attempt+1}/{CONFIG['retry_attempts']}: {e} (waiting {delay:.1f}s)")
+                time.sleep(delay)
     raise last_err
 
 
@@ -421,13 +464,7 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
     if CONFIG.get("xsrf_token"):
         params["at"] = CONFIG["xsrf_token"]
     body = urllib.parse.urlencode(params)
-    reqid = int(time.time()) % 1000000
     prefix = account_prefix()
-    url = (
-        f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
-        "assistant.lamda.BardFrontendService/StreamGenerate"
-        f"?bl={CONFIG['gemini_bl']}&hl=en&_reqid={reqid}&rt=c"
-    )
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Origin": "https://gemini.google.com",
@@ -453,52 +490,74 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
             yield text
         return
 
-    prev_text = ""
-    transport = httpx.HTTPTransport(proxy=proxy) if proxy else None
-    with httpx.Client(transport=transport, timeout=CONFIG["request_timeout_sec"], verify=True) as client:
-        try:
-            with client.stream("POST", url, content=body, headers=headers) as resp:
-                resp.raise_for_status()
-                buf = ""
-                for chunk in resp.iter_text():
-                    buf += chunk
-                    if "BardErrorInfo" in buf:
-                        import re as _re
-                        m = _re.search(r'BardErrorInfo["\s,]*\[(\d+)\]', buf)
-                        if m:
-                            raise RuntimeError(f"Gemini upstream rejected request: BardErrorInfo [{m.group(1)}]")
-                    while "\n" in buf:
-                        line, buf = buf.split("\n", 1)
-                        if '"wrb.fr"' not in line or len(line) < 200:
-                            continue
-                        try:
-                            arr = json.loads(line)
-                            inner_str = arr[0][2]
-                            if not inner_str or len(inner_str) < 50:
-                                continue
-                            inner2 = json.loads(inner_str)
-                            if isinstance(inner2, list) and len(inner2) > 4 and inner2[4]:
-                                for part in inner2[4]:
-                                    if isinstance(part, list) and len(part) > 1 and part[1] and isinstance(part[1], list):
-                                        for t in part[1]:
-                                            if isinstance(t, str) and len(t) > len(prev_text):
-                                                delta = t[len(prev_text):]
-                                                delta = clean_gemini_text(delta, strip=False)
-                                                if delta:
-                                                    yield delta
-                                                prev_text = t
-                        except (json.JSONDecodeError, IndexError, TypeError):
-                            pass
-        except Exception as e:
-            if HAS_HTTPX and hasattr(e, 'response') and getattr(e.response, 'status_code', 0) == 405:
-                if update_bl_if_needed():
-                    log("BL updated, falling back to non-streaming for this request")
-                    raw = gemini_stream_generate(prompt, model_id, think_mode)
-                    text = extract_response_text(raw)
-                    if text:
-                        yield text
-                    return
-            raise
+    last_err = None
+    with _upstream_semaphore:
+        for attempt in range(CONFIG["retry_attempts"]):
+            reqid = next_reqid()
+            url = (
+                f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
+                "assistant.lamda.BardFrontendService/StreamGenerate"
+                f"?bl={CONFIG['gemini_bl']}&hl=en&_reqid={reqid}&rt=c"
+            )
+            prev_text = ""
+            transport = httpx.HTTPTransport(proxy=proxy) if proxy else None
+            try:
+                with httpx.Client(transport=transport, timeout=CONFIG["request_timeout_sec"], verify=True) as client:
+                    with client.stream("POST", url, content=body, headers=headers) as resp:
+                        resp.raise_for_status()
+                        buf = ""
+                        for chunk in resp.iter_text():
+                            buf += chunk
+                            if "BardErrorInfo" in buf:
+                                import re as _re
+                                m = _re.search(r'BardErrorInfo["\s,]*\[(\d+)\]', buf)
+                                if m:
+                                    raise RuntimeError(f"Gemini upstream rejected request: BardErrorInfo [{m.group(1)}]")
+                            while "\n" in buf:
+                                line, buf = buf.split("\n", 1)
+                                if '"wrb.fr"' not in line or len(line) < 200:
+                                    continue
+                                try:
+                                    arr = json.loads(line)
+                                    inner_str = arr[0][2]
+                                    if not inner_str or len(inner_str) < 50:
+                                        continue
+                                    inner2 = json.loads(inner_str)
+                                    if isinstance(inner2, list) and len(inner2) > 4 and inner2[4]:
+                                        for part in inner2[4]:
+                                            if isinstance(part, list) and len(part) > 1 and part[1] and isinstance(part[1], list):
+                                                for t in part[1]:
+                                                    if isinstance(t, str) and len(t) > len(prev_text):
+                                                        delta = t[len(prev_text):]
+                                                        delta = clean_gemini_text(delta, strip=False)
+                                                        if delta:
+                                                            yield delta
+                                                        prev_text = t
+                                except (json.JSONDecodeError, IndexError, TypeError):
+                                    pass
+                return
+            except Exception as e:
+                if HAS_HTTPX and hasattr(e, 'response') and getattr(e.response, 'status_code', 0) == 405:
+                    if update_bl_if_needed():
+                        log("BL updated, falling back to non-streaming for this request")
+                        # Already holding _upstream_semaphore here -- use the
+                        # lock-free helper to avoid re-acquiring it and
+                        # deadlocking at max_concurrent_requests=1.
+                        raw = _gemini_stream_generate_locked(prompt, model_id, think_mode)
+                        text = extract_response_text(raw)
+                        if text:
+                            yield text
+                        return
+                if prev_text:
+                    # Already streamed partial content to the client; retrying
+                    # would duplicate or garble it, so surface the error instead.
+                    raise
+                last_err = e
+                if attempt < CONFIG["retry_attempts"] - 1:
+                    delay = retry_sleep_sec(attempt, e)
+                    log(f"Stream retry {attempt+1}/{CONFIG['retry_attempts']}: {e} (waiting {delay:.1f}s)")
+                    time.sleep(delay)
+        raise last_err
 
 
 def clean_gemini_text(text: str, strip: bool = True) -> str:
@@ -1148,9 +1207,18 @@ def load_config(path: str):
     if os.environ.get("TEMPORARY_CHATS"):
         CONFIG["temporary_chats"] = os.environ["TEMPORARY_CHATS"].strip().lower() == "true"
 
+    if os.environ.get("MAX_CONCURRENT_REQUESTS"):
+        try:
+            CONFIG["max_concurrent_requests"] = max(1, int(os.environ["MAX_CONCURRENT_REQUESTS"]))
+        except ValueError:
+            pass
+
     env_proxy = os.environ.get("HTTPS_PROXY", "").strip()
     if env_proxy:
         CONFIG["proxy"] = env_proxy
+
+    global _upstream_semaphore
+    _upstream_semaphore = threading.BoundedSemaphore(max(1, CONFIG["max_concurrent_requests"]))
 
 
 def main():
@@ -1197,9 +1265,16 @@ def main():
     print(f"  Listening: http://0.0.0.0:{port}")
     print(f"  Base URL:  http://localhost:{port}/v1")
     print(f"  Models:    {', '.join(MODELS.keys())}")
-    print(f"  Cookie:    {'yes (' + CONFIG['cookie_file'] + ')' if CONFIG.get('cookie_file') else 'none (anonymous)'}")
+    if CONFIG.get("cookie_file"):
+        cookie_status = f"yes ({CONFIG['cookie_file']})"
+    elif os.environ.get("GEMINI_COOKIE"):
+        cookie_status = "yes (GEMINI_COOKIE env)"
+    else:
+        cookie_status = "none (anonymous)"
+    print(f"  Cookie:    {cookie_status}")
     print(f"  Proxy:     {CONFIG.get('proxy') or 'none (uses system env HTTP_PROXY/HTTPS_PROXY)'}")
-    print(f"  Retry:     {CONFIG['retry_attempts']}x / {CONFIG['retry_delay_sec']}s")
+    print(f"  Retry:     {CONFIG['retry_attempts']}x / {CONFIG['retry_delay_sec']}s (exponential backoff + jitter)")
+    print(f"  Max concurrent upstream requests: {CONFIG['max_concurrent_requests']} (extra requests queue)")
     print(f"  BL:        {CONFIG['gemini_bl']}")
     print(f"  Temporary: {'yes' if CONFIG.get('temporary_chats', False) else 'no'}")
     print()

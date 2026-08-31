@@ -200,11 +200,14 @@ Create `config.json` in the same directory:
   "api_keys": ["sk-your-key"],
   "cookie_file": null,
   "proxy": null,
-  "log_requests": true
+  "log_requests": true,
+  "max_concurrent_requests": 3
 }
 ```
 
 When `api_keys` is `[]`, authentication is disabled. When one or more keys are set, `/v1/*` endpoints require `Authorization: Bearer <key>` or `x-api-key: <key>`.
+
+`max_concurrent_requests` caps how many requests are in flight to Gemini's backend at once; extra requests queue instead of firing in parallel. Bursts of simultaneous requests are what trip Google's rate limiting (429s), not the total requests-per-minute on their own, so raising this number too high brings 429s back even though total throughput looks the same.
 
 ### Environment variables
 
@@ -217,6 +220,7 @@ Useful on platforms without a persistent filesystem (Railway, Heroku, etc.) wher
 | `GEMINI_COOKIE` | Cookie content, used when no `cookie_file` is configured/found. Accepts the same two formats as the file: a raw `SID=...; HSID=...; ...` string, or the `{"cookie": "...", "sapisid": "..."}` JSON form. |
 | `GEMINI_SAPISID` | Optional; overrides the `SAPISID` parsed out of `GEMINI_COOKIE`. |
 | `GEMINI_WEB2API_CONFIG` | Path to `config.json`, if not in the working directory. |
+| `MAX_CONCURRENT_REQUESTS` | Overrides `config.json`'s `max_concurrent_requests`. |
 
 ## Docker
 
