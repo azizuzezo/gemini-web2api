@@ -96,6 +96,44 @@ def retry_sleep_sec(attempt: int, err: Exception = None) -> float:
         base *= 3
     return min(base + random.uniform(0, CONFIG["retry_delay_sec"]), 30)
 
+
+# ─── Global 429 circuit breaker ─────────────────────────────────────────────
+# One request hitting a 429 means Gemini is already throttling us; letting
+# every other in-flight/queued thread find that out independently (each on
+# its own retry timer) just re-triggers the same wall repeatedly. Instead,
+# the first thread to see a 429 posts a shared cooldown deadline that every
+# other attempt waits out before it even tries the network.
+
+_rate_limit_lock = threading.Lock()
+_rate_limit_until = 0.0
+
+
+def note_rate_limited(delay: float) -> None:
+    global _rate_limit_until
+    with _rate_limit_lock:
+        _rate_limit_until = max(_rate_limit_until, time.time() + delay)
+
+
+def wait_out_rate_limit() -> None:
+    while True:
+        with _rate_limit_lock:
+            remaining = _rate_limit_until - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, 5))
+
+
+# ─── Anonymous session bootstrap ────────────────────────────────────────────
+# Without a configured account cookie, requests otherwise carry zero session
+# context: no cookie, no anti-CSRF `at`/SNlM0e token, nothing but a bare POST.
+# That's a plausible source of 405s independent of `gemini_bl` drift. Scrape
+# what a real anonymous browser tab would get for free from a single page
+# load, and refresh it periodically / whenever a 405 suggests it's gone bad.
+
+_anon_session = {"cookie": "", "xsrf": None, "mtime": 0.0}
+_anon_session_lock = threading.Lock()
+ANON_SESSION_TTL_SEC = 600
+
 # ─── Models ──────────────────────────────────────────────────────────────────
 # Mapping from JS source: MODE_CATEGORY enum (028-6eb337387583.js)
 #   1=FAST, 2=THINKING, 3=PRO, 4=AUTO, 5=FAST_DYNAMIC_THINKING, 6=FLASH_LITE
@@ -304,8 +342,11 @@ def apply_chat_persistence_flags(inner: list) -> None:
         inner[41] = [2]
 
 
-def fetch_latest_bl() -> str | None:
-    """Fetch the latest gemini_bl from gemini.google.com page."""
+def fetch_anon_session() -> dict:
+    """GET gemini.google.com/app anonymously and scrape the build label
+    (bl), the anti-CSRF token (SNlM0e), and whatever session cookies Google
+    hands a fresh anonymous visitor."""
+    result = {"bl": None, "xsrf": None, "cookie": ""}
     try:
         req = urllib.request.Request(
             "https://gemini.google.com/app",
@@ -320,37 +361,92 @@ def fetch_latest_bl() -> str | None:
         else:
             resp = urllib.request.urlopen(req, context=ctx, timeout=15)
         html = resp.read().decode("utf-8", errors="replace")
+
         m = re.search(r'(boq_assistant-bard-web-server_\d+\.\d+_p\d+)', html)
         if m:
-            return m.group(1)
+            result["bl"] = m.group(1)
+
+        m = re.search(r'"SNlM0e":"([^"]+)"', html)
+        if m:
+            result["xsrf"] = m.group(1)
+
+        cookies = [raw.split(";", 1)[0] for raw in (resp.headers.get_all("Set-Cookie") or [])]
+        if cookies:
+            result["cookie"] = "; ".join(cookies)
     except Exception as e:
-        log(f"BL auto-update fetch failed: {e}")
-    return None
+        log(f"Anon session fetch failed: {e}")
+    return result
 
 
-def update_bl_if_needed() -> bool:
-    """Attempt to fetch and update gemini_bl. Returns True if updated."""
-    new_bl = fetch_latest_bl()
-    if new_bl and new_bl != CONFIG["gemini_bl"]:
-        log(f"BL auto-updated: {CONFIG['gemini_bl']} -> {new_bl}")
-        CONFIG["gemini_bl"] = new_bl
-        return True
-    return False
+def _refresh_anon_session_locked() -> None:
+    """Caller must hold _anon_session_lock."""
+    fresh = fetch_anon_session()
+    if fresh["bl"]:
+        CONFIG["gemini_bl"] = fresh["bl"]
+    if fresh["xsrf"]:
+        _anon_session["xsrf"] = fresh["xsrf"]
+    if fresh["cookie"]:
+        _anon_session["cookie"] = fresh["cookie"]
+    _anon_session["mtime"] = time.time()
+    log(f"Anon session refreshed (bl={CONFIG['gemini_bl']}, "
+        f"xsrf={'yes' if _anon_session['xsrf'] else 'no'}, "
+        f"cookie={'yes' if _anon_session['cookie'] else 'no'})")
+
+
+def get_anon_session(force: bool = False) -> dict:
+    """Cached anonymous session (bl/xsrf/cookie), refreshed on a TTL or when forced."""
+    with _anon_session_lock:
+        if force or time.time() - _anon_session["mtime"] > ANON_SESSION_TTL_SEC:
+            _refresh_anon_session_locked()
+        return dict(_anon_session)
+
+
+def refresh_session_if_needed() -> bool:
+    """Force-refresh after a 405: bl always, plus (without a configured
+    account cookie) the anonymous cookie/xsrf those requests still need.
+    Returns True if anything actually changed."""
+    before = (CONFIG["gemini_bl"], _anon_session["xsrf"], _anon_session["cookie"])
+    get_anon_session(force=True)
+    after = (CONFIG["gemini_bl"], _anon_session["xsrf"], _anon_session["cookie"])
+    return before != after
+
+
+def load_session() -> tuple:
+    """Returns (cookie_str, sapisid, xsrf_token) for outgoing StreamGenerate
+    calls: an explicitly configured account cookie/xsrf_token when present,
+    otherwise a scraped anonymous session (cookie + SNlM0e) as a fallback so
+    anonymous requests aren't sent with zero session context at all."""
+    cookie_file = CONFIG.get("cookie_file")
+    if cookie_file and os.path.exists(cookie_file):
+        try:
+            with open(cookie_file, "r") as f:
+                content = f.read()
+            cookie_str, sapisid = _parse_cookie_content(content)
+            return cookie_str, sapisid, CONFIG.get("xsrf_token")
+        except Exception as e:
+            log(f"Cookie load error: {e}")
+            return "", None, CONFIG.get("xsrf_token")
+
+    env_cookie = os.environ.get("GEMINI_COOKIE")
+    if env_cookie:
+        try:
+            cookie_str, sapisid = _parse_cookie_content(env_cookie)
+            return cookie_str, os.environ.get("GEMINI_SAPISID") or sapisid, CONFIG.get("xsrf_token")
+        except Exception as e:
+            log(f"GEMINI_COOKIE env parse error: {e}")
+            return "", None, CONFIG.get("xsrf_token")
+
+    anon = get_anon_session()
+    return anon["cookie"], None, CONFIG.get("xsrf_token") or anon["xsrf"]
 
 
 # ─── Gemini Protocol ─────────────────────────────────────────────────────────
 
 def gemini_stream_generate(prompt: str, model_id: int, think_mode: int) -> str:
-    """Send prompt to Gemini StreamGenerate with retry (acquires the upstream semaphore)."""
-    with _upstream_semaphore:
-        return _gemini_stream_generate_locked(prompt, model_id, think_mode)
-
-
-def _gemini_stream_generate_locked(prompt: str, model_id: int, think_mode: int) -> str:
-    """Same as gemini_stream_generate, but assumes the caller already holds
-    _upstream_semaphore. Only call this from a caller that already holds it
-    (e.g. the 405 fallback in gemini_stream_generate_iter) -- acquiring the
-    semaphore again from the same thread would deadlock at concurrency 1."""
+    """Send prompt to Gemini StreamGenerate with retry. The upstream semaphore
+    is only held around each individual network attempt (not across the
+    backoff sleep between attempts), so one slow-to-recover request doesn't
+    block the whole queue behind it."""
     inner = [None] * 80
     inner[0] = [prompt, 0, None, None, None, None, 0]
     inner[1] = ["en"]
@@ -372,59 +468,57 @@ def _gemini_stream_generate_locked(prompt: str, model_id: int, think_mode: int) 
 
     outer = [None, json.dumps(inner)]
     params = {"f.req": json.dumps(outer)}
-    if CONFIG.get("xsrf_token"):
-        params["at"] = CONFIG["xsrf_token"]
-    body = urllib.parse.urlencode(params).encode()
-    reqid = next_reqid()
     prefix = account_prefix()
-    url = (
-        f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
-        "assistant.lamda.BardFrontendService/StreamGenerate"
-        f"?bl={CONFIG['gemini_bl']}&hl=en&_reqid={reqid}&rt=c"
-    )
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": "https://gemini.google.com",
-        "Referer": f"https://gemini.google.com{prefix}/app",
-        "X-Same-Domain": "1",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    }
-    if prefix:
-        headers["X-Goog-AuthUser"] = str(CONFIG["auth_user"])
-
-    cookie_str, sapisid = load_cookie()
-    if cookie_str:
-        headers["Cookie"] = cookie_str
-    if sapisid:
-        headers["Authorization"] = make_sapisidhash(sapisid)
 
     last_err = None
     for attempt in range(CONFIG["retry_attempts"]):
+        wait_out_rate_limit()
+        cookie_str, sapisid, xsrf = load_session()
+        req_params = dict(params)
+        if xsrf:
+            req_params["at"] = xsrf
+        body = urllib.parse.urlencode(req_params).encode()
+        reqid = next_reqid()
+        url = (
+            f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
+            "assistant.lamda.BardFrontendService/StreamGenerate"
+            f"?bl={CONFIG['gemini_bl']}&hl=en&_reqid={reqid}&rt=c"
+        )
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://gemini.google.com",
+            "Referer": f"https://gemini.google.com{prefix}/app",
+            "X-Same-Domain": "1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        if prefix:
+            headers["X-Goog-AuthUser"] = str(CONFIG["auth_user"])
+        if cookie_str:
+            headers["Cookie"] = cookie_str
+        if sapisid:
+            headers["Authorization"] = make_sapisidhash(sapisid)
+
         try:
             req = urllib.request.Request(url, data=body, headers=headers, method="POST")
             ctx = ssl.create_default_context()
             proxy = CONFIG.get("proxy")
-            if proxy:
-                opener = urllib.request.build_opener(
-                    urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
-                    urllib.request.HTTPSHandler(context=ctx)
-                )
-                resp = opener.open(req, timeout=CONFIG["request_timeout_sec"])
-            else:
-                resp = urllib.request.urlopen(req, context=ctx, timeout=CONFIG["request_timeout_sec"])
-            return resp.read().decode("utf-8", errors="replace")
+            with _upstream_semaphore:
+                if proxy:
+                    opener = urllib.request.build_opener(
+                        urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
+                        urllib.request.HTTPSHandler(context=ctx)
+                    )
+                    resp = opener.open(req, timeout=CONFIG["request_timeout_sec"])
+                else:
+                    resp = urllib.request.urlopen(req, context=ctx, timeout=CONFIG["request_timeout_sec"])
+                return resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as e:
-            if e.code == 405 and update_bl_if_needed():
-                reqid = next_reqid()
-                url = (
-                    f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
-                    "assistant.lamda.BardFrontendService/StreamGenerate"
-                    f"?bl={CONFIG['gemini_bl']}&hl=en&_reqid={reqid}&rt=c"
-                )
-                log("Retrying with updated BL...")
-                last_err = e
-                continue
             last_err = e
+            if e.code == 429:
+                note_rate_limited(retry_sleep_sec(attempt, e))
+            if e.code == 405 and refresh_session_if_needed():
+                log("Retrying with refreshed session...")
+                continue
             if attempt < CONFIG["retry_attempts"] - 1:
                 delay = retry_sleep_sec(attempt, e)
                 log(f"Retry {attempt+1}/{CONFIG['retry_attempts']}: HTTP Error {e.code}: {e.reason} (waiting {delay:.1f}s)")
@@ -461,25 +555,7 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
 
     outer = [None, json.dumps(inner)]
     params = {"f.req": json.dumps(outer)}
-    if CONFIG.get("xsrf_token"):
-        params["at"] = CONFIG["xsrf_token"]
-    body = urllib.parse.urlencode(params)
     prefix = account_prefix()
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": "https://gemini.google.com",
-        "Referer": f"https://gemini.google.com{prefix}/app",
-        "X-Same-Domain": "1",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    }
-    if prefix:
-        headers["X-Goog-AuthUser"] = str(CONFIG["auth_user"])
-    cookie_str, sapisid = load_cookie()
-    if cookie_str:
-        headers["Cookie"] = cookie_str
-    if sapisid:
-        headers["Authorization"] = make_sapisidhash(sapisid)
-
     proxy = CONFIG.get("proxy")
 
     if not HAS_HTTPX:
@@ -491,17 +567,37 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
         return
 
     last_err = None
-    with _upstream_semaphore:
-        for attempt in range(CONFIG["retry_attempts"]):
-            reqid = next_reqid()
-            url = (
-                f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
-                "assistant.lamda.BardFrontendService/StreamGenerate"
-                f"?bl={CONFIG['gemini_bl']}&hl=en&_reqid={reqid}&rt=c"
-            )
-            prev_text = ""
-            transport = httpx.HTTPTransport(proxy=proxy) if proxy else None
-            try:
+    for attempt in range(CONFIG["retry_attempts"]):
+        wait_out_rate_limit()
+        cookie_str, sapisid, xsrf = load_session()
+        req_params = dict(params)
+        if xsrf:
+            req_params["at"] = xsrf
+        body = urllib.parse.urlencode(req_params)
+        reqid = next_reqid()
+        url = (
+            f"https://gemini.google.com{prefix}/_/BardChatUi/data/"
+            "assistant.lamda.BardFrontendService/StreamGenerate"
+            f"?bl={CONFIG['gemini_bl']}&hl=en&_reqid={reqid}&rt=c"
+        )
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://gemini.google.com",
+            "Referer": f"https://gemini.google.com{prefix}/app",
+            "X-Same-Domain": "1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        if prefix:
+            headers["X-Goog-AuthUser"] = str(CONFIG["auth_user"])
+        if cookie_str:
+            headers["Cookie"] = cookie_str
+        if sapisid:
+            headers["Authorization"] = make_sapisidhash(sapisid)
+
+        prev_text = ""
+        transport = httpx.HTTPTransport(proxy=proxy) if proxy else None
+        try:
+            with _upstream_semaphore:
                 with httpx.Client(transport=transport, timeout=CONFIG["request_timeout_sec"], verify=True) as client:
                     with client.stream("POST", url, content=body, headers=headers) as resp:
                         resp.raise_for_status()
@@ -535,29 +631,28 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
                                                         prev_text = t
                                 except (json.JSONDecodeError, IndexError, TypeError):
                                     pass
+            return
+        except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 405 and refresh_session_if_needed():
+                log("Session refreshed, falling back to non-streaming for this request")
+                raw = gemini_stream_generate(prompt, model_id, think_mode)
+                text = extract_response_text(raw)
+                if text:
+                    yield text
                 return
-            except Exception as e:
-                if HAS_HTTPX and hasattr(e, 'response') and getattr(e.response, 'status_code', 0) == 405:
-                    if update_bl_if_needed():
-                        log("BL updated, falling back to non-streaming for this request")
-                        # Already holding _upstream_semaphore here -- use the
-                        # lock-free helper to avoid re-acquiring it and
-                        # deadlocking at max_concurrent_requests=1.
-                        raw = _gemini_stream_generate_locked(prompt, model_id, think_mode)
-                        text = extract_response_text(raw)
-                        if text:
-                            yield text
-                        return
-                if prev_text:
-                    # Already streamed partial content to the client; retrying
-                    # would duplicate or garble it, so surface the error instead.
-                    raise
-                last_err = e
-                if attempt < CONFIG["retry_attempts"] - 1:
-                    delay = retry_sleep_sec(attempt, e)
-                    log(f"Stream retry {attempt+1}/{CONFIG['retry_attempts']}: {e} (waiting {delay:.1f}s)")
-                    time.sleep(delay)
-        raise last_err
+            if prev_text:
+                # Already streamed partial content to the client; retrying
+                # would duplicate or garble it, so surface the error instead.
+                raise
+            last_err = e
+            delay = retry_sleep_sec(attempt, e)
+            if status == 429:
+                note_rate_limited(delay)
+            if attempt < CONFIG["retry_attempts"] - 1:
+                log(f"Stream retry {attempt+1}/{CONFIG['retry_attempts']}: {e} (waiting {delay:.1f}s)")
+                time.sleep(delay)
+    raise last_err
 
 
 def clean_gemini_text(text: str, strip: bool = True) -> str:
@@ -1251,9 +1346,7 @@ def main():
     if args.proxy:
         CONFIG["proxy"] = args.proxy
 
-    new_bl = fetch_latest_bl()
-    if new_bl:
-        CONFIG["gemini_bl"] = new_bl
+    get_anon_session(force=True)
 
     class ThreadedServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
