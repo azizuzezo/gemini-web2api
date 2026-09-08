@@ -749,12 +749,26 @@ def messages_to_prompt(messages: list, tools: list = None) -> str:
                 "parameters": fn.get("parameters", tool.get("parameters", {})),
             })
         if tool_defs:
+            # Natural, non-"[System instruction]"-prefixed framing — the old
+            # injection-style wording (fake system-instruction header + fenced
+            # command block + raw JSON dump) tends to get flagged and rejected
+            # by Gemini's web backend as BardErrorInfo on large/complex tool
+            # sets. Mirrors gemini_web2api/tools.py's build_tool_prompt, which
+            # was already written for this reason but never wired into this
+            # endpoint. Keeps the tool_call/arguments format so parse_tool_calls
+            # below doesn't need to change.
             parts.append(
-                "[System instruction]: You have access to tools. "
-                "To call a tool, respond with:\n"
-                '```tool_call\n{"name": "func_name", "arguments": {...}}\n```\n'
-                "Only use tool_call blocks when needed.\n\n"
-                f"Available tools:\n{json.dumps(tool_defs, indent=2)}"
+                "# Tool Use\n\n"
+                "You can call the following tools to help accomplish tasks. "
+                "These tools connect to the user's local environment and will "
+                "execute when called.\n\n"
+                "Call format (use this exact format):\n"
+                '```tool_call\n{"name": "<tool_name>", "arguments": {<arguments>}}\n```\n\n'
+                "When calling tools:\n"
+                "- Output ONLY the tool_call block(s), nothing else\n"
+                "- You may call multiple tools with multiple blocks\n"
+                "- After receiving a [Tool result for ...], use that data to answer the user\n\n"
+                f"Available tools:\n{json.dumps(tool_defs, indent=2, ensure_ascii=False)}"
             )
     for msg in messages:
         role = msg.get("role", "user")
@@ -965,12 +979,29 @@ class GeminiHandler(BaseHTTPRequestHandler):
         })
 
     def _call_gemini(self, prompt, model_id, think_mode, tools):
-        raw = gemini_stream_generate(prompt, model_id, think_mode)
-        text = extract_response_text(raw)
-        tool_calls = None
-        if tools and text:
-            text, tool_calls = parse_tool_calls(text)
-        return text or "", tool_calls
+        # extract_response_text raises RuntimeError on BardErrorInfo *after* a
+        # 200 OK response — gemini_stream_generate's own retry loop never sees
+        # this class of failure, so it was previously never retried at all.
+        # Each retry re-runs gemini_stream_generate too, so it goes out with a
+        # fresh reqid/session state, not a resend of the identical request.
+        last_err = None
+        for attempt in range(CONFIG["retry_attempts"]):
+            raw = gemini_stream_generate(prompt, model_id, think_mode)
+            try:
+                text = extract_response_text(raw)
+            except RuntimeError as e:
+                last_err = e
+                if "BardErrorInfo" in str(e) and attempt < CONFIG["retry_attempts"] - 1:
+                    delay = retry_sleep_sec(attempt, e)
+                    log(f"Retry {attempt+1}/{CONFIG['retry_attempts']}: {e} (waiting {delay:.1f}s)")
+                    time.sleep(delay)
+                    continue
+                raise
+            tool_calls = None
+            if tools and text:
+                text, tool_calls = parse_tool_calls(text)
+            return text or "", tool_calls
+        raise last_err
 
     def handle_chat(self, body: bytes):
         req = self._parse_body(body) or {}
