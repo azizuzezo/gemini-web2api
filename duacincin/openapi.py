@@ -207,7 +207,7 @@ def build_openapi_spec() -> dict:
     return {
         "openapi": "3.0.3",
         "info": {
-            "title": "gemini-web2api",
+            "title": "DuaCincin",
             "version": __version__,
             "description": (
                 "Convert Google Gemini's web interface into an OpenAI-compatible API. "
@@ -352,7 +352,7 @@ DOCS_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>gemini-web2api &mdash; API Docs (Swagger UI)</title>
+  <title>DuaCincin &mdash; API Docs (Swagger UI)</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
   <style>body { margin: 0; background: #fafafa; }</style>
 </head>

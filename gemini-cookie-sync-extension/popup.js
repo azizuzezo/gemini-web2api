@@ -397,7 +397,7 @@ exportButton.addEventListener("click", async () => {
       `XSRF: present\n` +
       `gemini_bl: ${info.pageMetadata.geminiBl ? "present" : "not present — current server setting will remain"}\n` +
       `auth_user: ${info.authUser ?? "null"}\n\n` +
-      "Move the file into gemini-web2api and do not share it or commit it to Git.",
+      "Move the file into duacincin and do not share it or commit it to Git.",
       "ok"
     );
   } catch (error) {

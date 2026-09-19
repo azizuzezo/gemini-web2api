@@ -1,5 +1,5 @@
 /**
- * Gemini Web2API - Cloudflare Workers 完整并发安全修复版
+ * DuaCincin - Cloudflare Workers 完整并发安全修复版
  * 多指纹轮换 + 多Cookie轮换 + 打字机效果 + 随机延迟
  * 
  * ============================================================================
@@ -143,8 +143,8 @@
  * - 当 env.X 不存在时，if 不执行，CONFIG.X 保留上次值 ✗
  * 使用 CONFIG.X = env.X || null 确保始终显式赋值。
  * 
- * 基于原项目 gemini-web2api v1.1.0 移植
- * 原作者项目: https://github.com/your-repo/gemini-web2api
+ * 基于原项目 duacincin v1.1.0 移植
+ * 原作者项目: https://github.com/your-repo/duacincin
  */
 
 // ============================================================================

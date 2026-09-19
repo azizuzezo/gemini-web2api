@@ -1,5 +1,5 @@
 [project]
-name = "gemini-web2api"
+name = "duacincin"
 version = "1.1.0"
 description = "Convert Google Gemini web into OpenAI-compatible API"
 readme = "README.md"
@@ -11,7 +11,7 @@ dependencies = []
 streaming = ["httpx>=0.25"]
 
 [project.scripts]
-gemini-web2api = "gemini_web2api.__main__:main"
+duacincin = "duacincin.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68"]

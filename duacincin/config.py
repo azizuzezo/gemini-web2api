@@ -85,7 +85,7 @@ def find_config():
 
     for p in [
         "./config.json",
-        os.path.expanduser("~/.config/gemini-web2api/config.json"),
+        os.path.expanduser("~/.config/duacincin/config.json"),
     ]:
         if os.path.exists(p):
             return p

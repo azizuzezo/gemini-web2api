@@ -3,7 +3,7 @@ import threading
 import unittest
 from urllib.request import urlopen
 
-from gemini_web2api.server import GeminiHandler, ThreadedServer
+from duacincin.server import GeminiHandler, ThreadedServer
 
 
 class ApiDocsTest(unittest.TestCase):

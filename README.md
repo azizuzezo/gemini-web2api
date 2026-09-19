@@ -1,7 +1,7 @@
-# gemini-web2api
+# DuaCincin
 
 <p align="center">
-  <img src="logo.png" width="200" alt="gemini-web2api logo">
+  <img src="logo.png" width="200" alt="DuaCincin logo">
 </p>
 
 [中文文档](README_CN.md)
@@ -28,7 +28,7 @@ Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, 
 
 ```bash
 pip install httpx
-python gemini_web2api.py
+python duacincin.py
 ```
 
 Server starts at `http://localhost:8081/v1`.
@@ -148,7 +148,7 @@ gemini-3.5-flash-thinking@think=4   # shallowest
 Anonymous access works for all models, but `gemini-3.1-pro` routes to Flash without authentication. To get real Pro routing, you need a **Gemini Advanced (paid subscription)** account cookie:
 
 ```bash
-python gemini_web2api.py --cookie-file cookie.txt
+python duacincin.py --cookie-file cookie.txt
 ```
 
 ### How to get cookies
@@ -230,15 +230,15 @@ Useful on platforms without a persistent filesystem (Railway, Heroku, etc.) wher
 | `API_KEYS` | Comma-separated list (or JSON array) of accepted API keys, e.g. `sk-a,sk-b`. Overrides `config.json`'s `api_keys`. |
 | `GEMINI_COOKIE` | Cookie content, used when no `cookie_file` is configured/found. Accepts the same two formats as the file: a raw `SID=...; HSID=...; ...` string, or the `{"cookie": "...", "sapisid": "..."}` JSON form. |
 | `GEMINI_SAPISID` | Optional; overrides the `SAPISID` parsed out of `GEMINI_COOKIE`. |
-| `GEMINI_WEB2API_CONFIG` | Path to `config.json`, if not in the working directory. |
+| `DUACINCIN_CONFIG` | Path to `config.json`, if not in the working directory. |
 | `MAX_CONCURRENT_REQUESTS` | Overrides `config.json`'s `max_concurrent_requests`. |
 
 ## Docker
 
 ```bash
 cp config.example.json config.json
-docker build -t gemini-web2api .
-docker run -d --name gemini-web2api -p 8081:8081 -v ./config.json:/app/config.json gemini-web2api
+docker build -t duacincin .
+docker run -d --name duacincin -p 8081:8081 -v ./config.json:/app/config.json duacincin
 ```
 
 Or use Docker Compose:
@@ -251,7 +251,7 @@ docker compose up -d
 To mount a cookie file:
 
 ```bash
-docker run -d --name gemini-web2api -p 8081:8081 -v ./config.json:/app/config.json -v ./cookie.txt:/app/cookie.txt gemini-web2api
+docker run -d --name duacincin -p 8081:8081 -v ./config.json:/app/config.json -v ./cookie.txt:/app/cookie.txt duacincin
 ```
 
 Set `"cookie_file": "/app/cookie.txt"` in `config.json`.
@@ -266,7 +266,7 @@ If you cannot access `gemini.google.com` directly (connection timeout), configur
 
 **Method 1: CLI argument**
 ```bash
-python gemini_web2api.py --proxy http://127.0.0.1:7890
+python duacincin.py --proxy http://127.0.0.1:7890
 ```
 
 **Method 2: config.json**
@@ -277,7 +277,7 @@ python gemini_web2api.py --proxy http://127.0.0.1:7890
 **Method 3: Environment variable** (auto-detected)
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:7890
-python gemini_web2api.py
+python duacincin.py
 ```
 
 Works with Clash, V2Ray, Shadowsocks, or any HTTP proxy.

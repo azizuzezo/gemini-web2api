@@ -1,6 +1,6 @@
 # Gemini Cookie Sync Setup
 
-Short guide for extracting fresh Gemini auth data and applying it to `gemini-web2api`.
+Short guide for extracting fresh Gemini auth data and applying it to `duacincin`.
 
 ## What this extension exports
 
@@ -34,12 +34,12 @@ gemini_bl / cfb2h: present
 Session and XSRF are ready for export.
 ```
 
-## Apply it in `gemini-web2api`
+## Apply it in `duacincin`
 
 Move the exported file into the project:
 
 ```bash
-cd /path/to/gemini-web2api
+cd /path/to/duacincin
 
 WIN_HOME=$(wslpath "$(powershell.exe -NoProfile -Command '[Environment]::GetFolderPath(\"UserProfile\")' | tr -d '\r')")
 cp "$WIN_HOME/Downloads/gemini-auth.json" ./gemini-auth.json
@@ -49,7 +49,7 @@ chmod 600 gemini-auth.json
 Update `config.json`:
 
 ```bash
-cd /path/to/gemini-web2api
+cd /path/to/duacincin
 
 AUTH_FILE="$(pwd)/gemini-auth.json"
 tmp=$(mktemp)

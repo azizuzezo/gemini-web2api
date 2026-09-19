@@ -1,8 +1,8 @@
-# Gemini Web2API - Cloudflare Workers 部署文档
+# DuaCincin - Cloudflare Workers 部署文档
 
 ## 📖 项目简介
 
-Gemini Web2API 是一个部署在 Cloudflare Workers 上的无服务器代理服务，将 Google Gemini 的 Web 界面转换为 OpenAI 兼容的 API 接口。无需服务器、无需 API Key（可选），开箱即用。
+DuaCincin 是一个部署在 Cloudflare Workers 上的无服务器代理服务，将 Google Gemini 的 Web 界面转换为 OpenAI 兼容的 API 接口。无需服务器、无需 API Key（可选），开箱即用。
 
 ### 核心特性
 
@@ -290,10 +290,10 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 | 1.5.0 | 2026-07-31 | 新增多指纹轮换、多Cookie轮换、随机延迟机制 |
 | 1.4.0 | 2026-07-30 | 修复并发串扰、速率限制内存安全 |
 | 1.3.0 | 2026-07-29 | 修复 SSE 流式格式、NextChat 兼容性 |
-| 1.0.0 | 2026-07-16 | 初始版本，基于 gemini-web2api v1.1.0 移植 |
+| 1.0.0 | 2026-07-16 | 初始版本，基于 duacincin v1.1.0 移植 |
 
 ---
 
 ## 📄 许可证
 
-本项目基于原项目 [gemini-web2api](https://github.com/your-repo/gemini-web2api) 移植，遵循原项目的开源协议。
+本项目基于原项目 [duacincin](https://github.com/your-repo/duacincin) 移植，遵循原项目的开源协议。

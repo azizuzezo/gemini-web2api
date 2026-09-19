@@ -1,1 +1,1 @@
-web: python gemini_web2api.py
+web: python duacincin.py

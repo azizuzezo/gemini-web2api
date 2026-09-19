@@ -1,7 +1,7 @@
-# gemini-web2api
+# DuaCincin
 
 <p align="center">
-  <img src="logo.png" width="200" alt="gemini-web2api logo">
+  <img src="logo.png" width="200" alt="DuaCincin logo">
 </p>
 
 [English](README.md)
@@ -26,7 +26,7 @@
 
 ```bash
 pip install httpx
-python gemini_web2api.py
+python duacincin.py
 ```
 
 服务启动在 `http://localhost:8081/v1`.
@@ -112,7 +112,7 @@ gemini-3.5-flash-thinking@think=4   # 最浅
 匿名访问对所有模型有效, 但 `gemini-3.1-pro` 在无认证时会路由到 Flash. 要获得真正的 Pro 路由, 需要 **Gemini Advanced (付费订阅)** 账号的 cookie:
 
 ```bash
-python gemini_web2api.py --cookie-file cookie.txt
+python duacincin.py --cookie-file cookie.txt
 ```
 
 ### 如何获取 Cookie
@@ -185,8 +185,8 @@ Pro 路由需要 **Gemini Advanced** (付费订阅). 免费 Google 账号的 coo
 
 ```bash
 cp config.example.json config.json
-docker build -t gemini-web2api .
-docker run -d --name gemini-web2api -p 8081:8081 -v ./config.json:/app/config.json gemini-web2api
+docker build -t duacincin .
+docker run -d --name duacincin -p 8081:8081 -v ./config.json:/app/config.json duacincin
 ```
 
 或使用 Docker Compose:
@@ -199,7 +199,7 @@ docker compose up -d
 如需挂载 Cookie 文件:
 
 ```bash
-docker run -d --name gemini-web2api -p 8081:8081 -v ./config.json:/app/config.json -v ./cookie.txt:/app/cookie.txt gemini-web2api
+docker run -d --name duacincin -p 8081:8081 -v ./config.json:/app/config.json -v ./cookie.txt:/app/cookie.txt duacincin
 ```
 
 此时 `config.json` 中设置 `"cookie_file": "/app/cookie.txt"`.
@@ -212,7 +212,7 @@ docker run -d --name gemini-web2api -p 8081:8081 -v ./config.json:/app/config.js
 
 **方式 1: 命令行参数**
 ```bash
-python gemini_web2api.py --proxy http://127.0.0.1:7890
+python duacincin.py --proxy http://127.0.0.1:7890
 ```
 
 **方式 2: config.json**
@@ -223,7 +223,7 @@ python gemini_web2api.py --proxy http://127.0.0.1:7890
 **方式 3: 环境变量** (自动检测)
 ```bash
 set HTTPS_PROXY=http://127.0.0.1:7890
-python gemini_web2api.py
+python duacincin.py
 ```
 
 支持 Clash, V2Ray, Shadowsocks 等任何 HTTP 代理.

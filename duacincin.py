@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-gemini-web2api - Gemini Web to OpenAI API proxy.
+DuaCincin - Gemini Web to OpenAI API proxy.
 
 Converts Google Gemini's web interface into an OpenAI-compatible API server.
 Zero authentication required. Works on any platform (Windows/macOS/Linux).
 
 Usage:
     pip install httpx
-    python gemini_web2api.py [--port 8081] [--config config.json]
+    python duacincin.py [--port 8081] [--config config.json]
 
 Client configuration (Cherry Studio, ChatBox, etc.):
     Base URL: http://localhost:8081/v1
@@ -753,7 +753,7 @@ def messages_to_prompt(messages: list, tools: list = None) -> str:
             # injection-style wording (fake system-instruction header + fenced
             # command block + raw JSON dump) tends to get flagged and rejected
             # by Gemini's web backend as BardErrorInfo on large/complex tool
-            # sets. Mirrors gemini_web2api/tools.py's build_tool_prompt, which
+            # sets. Mirrors duacincin/tools.py's build_tool_prompt, which
             # was already written for this reason but never wired into this
             # endpoint. Keeps the tool_call/arguments format so parse_tool_calls
             # below doesn't need to change.
@@ -1025,7 +1025,7 @@ def build_openapi_spec() -> dict:
     return {
         "openapi": "3.0.3",
         "info": {
-            "title": "gemini-web2api",
+            "title": "DuaCincin",
             "version": __version__,
             "description": (
                 "Convert Google Gemini's web interface into an OpenAI-compatible API. "
@@ -1170,7 +1170,7 @@ DOCS_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>gemini-web2api &mdash; API Docs (Swagger UI)</title>
+  <title>DuaCincin &mdash; API Docs (Swagger UI)</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
   <style>body { margin: 0; background: #fafafa; }</style>
 </head>
@@ -1739,12 +1739,12 @@ def main():
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--cookie-file", type=str, default=None, help="Path to cookie file")
     parser.add_argument("--proxy", type=str, default=None, help="HTTP proxy, e.g. http://127.0.0.1:7890")
-    parser.add_argument("--version", action="version", version=f"gemini-web2api {__version__}")
+    parser.add_argument("--version", action="version", version=f"duacincin {__version__}")
     args = parser.parse_args()
 
-    config_path = args.config or os.environ.get("GEMINI_WEB2API_CONFIG")
+    config_path = args.config or os.environ.get("DUACINCIN_CONFIG")
     if not config_path:
-        for p in ["./config.json", os.path.expanduser("~/.config/gemini-web2api/config.json")]:
+        for p in ["./config.json", os.path.expanduser("~/.config/duacincin/config.json")]:
             if os.path.exists(p):
                 config_path = p
                 break
@@ -1771,7 +1771,7 @@ def main():
 
     port = CONFIG["port"]
     server = ThreadedServer((CONFIG["host"], port), GeminiHandler)
-    print(f"gemini-web2api v{__version__}")
+    print(f"DuaCincin v{__version__}")
     print(f"  Listening: http://0.0.0.0:{port}")
     print(f"  Base URL:  http://localhost:{port}/v1")
     print(f"  Models:    {', '.join(MODELS.keys())}")
