@@ -1027,12 +1027,6 @@ def build_openapi_spec() -> dict:
         "info": {
             "title": "DuaCincin",
             "version": __version__,
-            "description": (
-                "Convert Google Gemini's web interface into an OpenAI-compatible API. "
-                "Use the **Authorize** button to set a Bearer/API key if this server has `api_keys` "
-                "configured (leave it blank otherwise), then use **Try it out** on any endpoint below "
-                "to send a real request to this running server."
-            ),
         },
         "servers": [{"url": "/", "description": "This server"}],
         "tags": [
