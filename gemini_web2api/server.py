@@ -12,6 +12,7 @@ from .models import MODELS, resolve_model
 from .gemini import generate, generate_stream, generate_with_images, load_cookie, log
 from .tools import messages_to_prompt, parse_tool_calls, google_contents_to_prompt, parse_google_function_calls
 from .multimodal import upload_image, fetch_image_bytes
+from .openapi import build_openapi_spec, DOCS_HTML
 from . import __version__
 
 
@@ -51,6 +52,14 @@ class GeminiHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_html(self, html: str, status=200):
+        body = html.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -125,6 +134,10 @@ class GeminiHandler(BaseHTTPRequestHandler):
                      "supportedGenerationMethods": ["generateContent", "streamGenerateContent"]}
                     for n, c in MODELS.items()
                 ]})
+            elif self.path == "/openapi.json":
+                self.send_json(build_openapi_spec())
+            elif self.path == "/docs":
+                self.send_html(DOCS_HTML)
             elif self.path == "/":
                 self.send_json({"status": "ok", "version": __version__, "models": list(MODELS.keys())})
             else:

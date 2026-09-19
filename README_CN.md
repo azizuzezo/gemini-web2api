@@ -10,6 +10,7 @@
 
 ## 特性
 
+- **交互式 API 文档**: `/docs` 提供 Swagger UI, 支持在线 **Try it out** 测试, 规范文件见 `/openapi.json`
 - **可选密钥**: `api_keys` 为空时免密, 填入密钥后按 OpenAI Bearer Key 校验
 - **OpenAI 兼容**: 直接替换 `/v1/chat/completions` 和 `/v1/models`
 - **工具调用**: 完整的 Function Calling 支持 (OpenAI 格式)
@@ -29,6 +30,16 @@ python gemini_web2api.py
 ```
 
 服务启动在 `http://localhost:8081/v1`.
+
+## API 文档
+
+交互式、可在线测试的 API 文档 (Swagger UI) 地址:
+
+```
+http://localhost:8081/docs
+```
+
+列出了所有端点 (`/v1/chat/completions`、`/v1/images/generations`、`/v1/models`、`/v1/responses`、`/v1beta/models/...`) 及其请求/响应结构和示例。点击 **Try it out** 即可直接在浏览器里向正在运行的服务发送真实请求, 无需额外客户端。若配置了 `api_keys`, 先点击 **Authorize** 填入密钥。原始 OpenAPI 3.0 规范文件在 `http://localhost:8081/openapi.json`, 可导入 Postman、Insomnia 或用于生成客户端 SDK。
 
 ## 客户端配置
 

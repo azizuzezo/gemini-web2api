@@ -10,6 +10,7 @@ Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, 
 
 ## Features
 
+- **Interactive API Docs**: Swagger UI at `/docs` with **Try it out** support, spec at `/openapi.json`
 - **Optional API Keys**: no auth when `api_keys` is empty, OpenAI-style Bearer auth when configured
 - **OpenAI Compatible**: Drop-in replacement for `/v1/chat/completions`, `/v1/images/generations`, and `/v1/models`
 - **Image Generation**: Standard `/v1/images/generations` endpoint powered by Imagen 3 (`imagen-3.0-generate-002`, `imagen-3`, `dall-e-3`, `dall-e-2`)
@@ -31,6 +32,16 @@ python gemini_web2api.py
 ```
 
 Server starts at `http://localhost:8081/v1`.
+
+## API Docs
+
+Interactive, testable API documentation (Swagger UI) is served at:
+
+```
+http://localhost:8081/docs
+```
+
+It lists every endpoint (`/v1/chat/completions`, `/v1/images/generations`, `/v1/models`, `/v1/responses`, `/v1beta/models/...`) with request/response schemas and examples. Use **Try it out** to send real requests straight from the browser to this running server — no separate client needed. If `api_keys` is configured, click **Authorize** first and paste your key. The raw OpenAPI 3.0 spec is available at `http://localhost:8081/openapi.json` for importing into Postman, Insomnia, or generating client SDKs.
 
 ## Client Configuration
 
