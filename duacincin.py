@@ -35,6 +35,7 @@ import base64
 import threading
 import random
 import itertools
+import contextlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -409,11 +410,31 @@ def _refresh_anon_session_locked() -> None:
         f"cookie={'yes' if _anon_session['cookie'] else 'no'})")
 
 
-def get_anon_session(force: bool = False) -> dict:
-    """Cached anonymous session (bl/xsrf/cookie), refreshed on a TTL or when forced."""
-    with _anon_session_lock:
-        if force or time.time() - _anon_session["mtime"] > ANON_SESSION_TTL_SEC:
+_anon_refreshing = False
+
+
+def _refresh_anon_session_bg() -> None:
+    global _anon_refreshing
+    try:
+        with _anon_session_lock:
             _refresh_anon_session_locked()
+    finally:
+        _anon_refreshing = False
+
+
+def get_anon_session(force: bool = False) -> dict:
+    """Cached anonymous session (bl/xsrf/cookie), refreshed on a TTL or when forced.
+    A merely stale (not forced, not empty) session is refreshed in the
+    background so the request that notices the TTL expiry isn't stalled on
+    the /app page fetch."""
+    global _anon_refreshing
+    with _anon_session_lock:
+        stale = time.time() - _anon_session["mtime"] > ANON_SESSION_TTL_SEC
+        if force or (stale and not _anon_session["mtime"]):
+            _refresh_anon_session_locked()
+        elif stale and not _anon_refreshing:
+            _anon_refreshing = True
+            threading.Thread(target=_refresh_anon_session_bg, daemon=True).start()
         return dict(_anon_session)
 
 
@@ -548,6 +569,24 @@ def gemini_stream_generate(prompt: str, model_id: int, think_mode: int) -> str:
     raise last_err
 
 
+_httpx_clients = {}
+_httpx_clients_lock = threading.Lock()
+
+
+def _get_httpx_client(proxy):
+    """Shared keep-alive client per proxy, so each request skips the new
+    TCP + TLS handshake to gemini.google.com."""
+    with _httpx_clients_lock:
+        client = _httpx_clients.get(proxy)
+        if client is None:
+            client = httpx.Client(
+                proxy=proxy, timeout=CONFIG["request_timeout_sec"], verify=True,
+                limits=httpx.Limits(max_keepalive_connections=8, keepalive_expiry=30),
+            )
+            _httpx_clients[proxy] = client
+        return client
+
+
 def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
     """Send prompt and yield incremental text deltas using httpx streaming."""
     inner = [None] * 80
@@ -611,10 +650,9 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
             headers["Authorization"] = make_sapisidhash(sapisid)
 
         prev_text = ""
-        transport = httpx.HTTPTransport(proxy=proxy) if proxy else None
         try:
             with _upstream_semaphore:
-                with httpx.Client(transport=transport, timeout=CONFIG["request_timeout_sec"], verify=True) as client:
+                with contextlib.nullcontext(_get_httpx_client(proxy)) as client:
                     with client.stream("POST", url, content=body, headers=headers) as resp:
                         resp.raise_for_status()
                         buf = ""
@@ -1427,6 +1465,7 @@ class GeminiHandler(BaseHTTPRequestHandler):
                 first_chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                                "model": model_name, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
                 self.wfile.write(f"data: {json.dumps(first_chunk)}\n\n".encode())
+                self.wfile.flush()
                 for delta_text in gemini_stream_generate_iter(prompt, model_id, think_mode):
                     chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                              "model": model_name, "choices": [{"index": 0, "delta": {"content": delta_text}, "finish_reason": None}]}
