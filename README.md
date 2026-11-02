@@ -15,7 +15,7 @@ Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, 
 - **OpenAI Compatible**: Drop-in replacement for `/v1/chat/completions`, `/v1/images/generations`, and `/v1/models`
 - **Image Generation**: Standard `/v1/images/generations` endpoint powered by Imagen 3 (`imagen-3.0-generate-002`, `imagen-3`, `dall-e-3`, `dall-e-2`)
 - **Tool Calling**: Full function calling support (OpenAI format)
-- **Multiple Models**: Flash (3.6/3.5/2.5/2.0/1.5), Extended Thinking, Pro, Auto, Lite, Nano Banana (`nano-banana`)
+- **Multiple Models**: Flash (3.8, Argon 4, 3.5 Lite; 3.7/3.6/3.5 are aliases of 3.8), Extended Thinking, Pro, Auto, Lite, Nano Banana (`nano-banana`)
 - **Thinking Depth**: Adjustable via `@think=N` suffix (0=deepest, 4=shallowest)
 - **Flexible Model Selection**: Choose model via JSON body `model`, `x-gemini-model` / `x-model` header, or `?model=...` query string
 - **Web Search**: Built-in internet access (Gemini's native search)
@@ -120,15 +120,16 @@ Supports Google native API endpoints:
 
 | Model | Description | Output |
 |-------|-------------|--------|
-| `gemini-4-argon` | Gemini 4 Argon (Flash category) | ~12k chars |
-| `gemini-3.7-flash` | All-around model (latest, default) | ~12k chars |
-| `gemini-3.6-flash` | Alias for gemini-3.7-flash | ~12k chars |
-| `gemini-3.5-flash` | Alias for gemini-3.7-flash | ~12k chars |
+| `gemini-4-argon` | Gemini 4 Argon (complex tasks) | ~12k chars |
+| `gemini-3.8-flash` | Gemini 3.8 Flash, all-around (default) | ~12k chars |
+| `gemini-3.7-flash` | Alias for gemini-3.8-flash | ~12k chars |
+| `gemini-3.6-flash` | Alias for gemini-3.8-flash | ~12k chars |
+| `gemini-3.5-flash` | Alias for gemini-3.8-flash | ~12k chars |
 | `gemini-3.5-flash-thinking` | Extended thinking, longest output | **~20k chars** |
 | `gemini-3.5-flash-thinking-lite` | Adaptive thinking depth | ~15k chars |
-| `gemini-3.1-pro` | Advanced math & code (needs cookie) | ~12k chars |
+| `gemini-3.1-pro` | Gemini 3.1 Pro, advanced reasoning (needs cookie) | ~12k chars |
 | `gemini-auto` | Auto model selection | varies |
-| `gemini-flash-lite` | Fastest answers, lightweight | ~10k chars |
+| `gemini-flash-lite` | Gemini 3.5 Flash-Lite, fastest answers | ~10k chars |
 | `nano-banana` | Ultra-fast lightweight model alias | ~10k chars |
 | `imagen-3.0-generate-002` | Imagen 3 Image Generation model (needs cookie) | Image URL |
 | `imagen-3` | Alias for Imagen 3 | Image URL |
@@ -145,6 +146,19 @@ gemini-3.5-flash-thinking@think=4   # shallowest
 ```
 
 ## Optional: Cookie for Pro
+
+### How model selection works
+
+The web UI does not send a model name. It sends a numeric *mode* (field 80 of the request, `inner[79]`) plus a *think* id (field 18, `inner[17]`). The values below were captured from the Gemini web model picker:
+
+| Picker entry | mode | think |
+|---|---|---|
+| 3.5 Flash-Lite | 6 | 8 |
+| 3.8 Flash | 1 | 10 |
+| 3.1 Pro | 3 | 0 |
+| 4 Argon | 8 | 9 |
+
+Names older than the picker (3.7, 3.6, 3.5, 2.x, 1.5) are only labels for the Flash mode. Whether a given mode is served by the real model depends on the account: anonymous sessions may be routed to Flash.
 
 Anonymous access works for all models, but `gemini-3.1-pro` routes to Flash without authentication. To get real Pro routing, you need a **Gemini Advanced (paid subscription)** account cookie:
 

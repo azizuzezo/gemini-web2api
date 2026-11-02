@@ -58,7 +58,7 @@ DEFAULT_CONFIG = {
     "gemini_bl": "boq_assistant-bard-web-server_20260825.12_p0",
     "auth_user": None,
     "xsrf_token": None,
-    "default_model": "gemini-3.7-flash",
+    "default_model": "gemini-3.8-flash",
     "log_requests": True,
     "cookie_file": None,
     "proxy": None,
@@ -141,24 +141,24 @@ ANON_SESSION_TTL_SEC = 600
 
 MODELS = {
     "gemini-4-argon": {
-        "mode": 1, "think": 4,
-        "desc": "Gemini 4 Argon (Flash category)",
+        "mode": 8, "think": 9,
+        "desc": "Gemini 4 Argon (mode 8, captured from the web UI model picker)",
     },
     "gemini-3.8-flash": {
-        "mode": 1, "think": 4,
-        "desc": "Gemini 3.8 Flash (Flash category, released 2026-09)",
+        "mode": 1, "think": 10,
+        "desc": "Gemini 3.8 Flash (mode 1, captured from the web UI model picker)",
     },
     "gemini-3.7-flash": {
-        "mode": 1, "think": 4,
-        "desc": "Latest all-around model (Gemini 3.7 Flash, confirmed current default of the 'Flash' category as of 2026-08)",
+        "mode": 1, "think": 10,
+        "desc": "Alias for gemini-3.8-flash (no longer in the web UI model picker)",
     },
     "gemini-3.6-flash": {
-        "mode": 1, "think": 4,
-        "desc": "Alias for gemini-3.7-flash (backend upgraded)",
+        "mode": 1, "think": 10,
+        "desc": "Alias for gemini-3.8-flash (no longer in the web UI model picker)",
     },
     "gemini-3.5-flash": {
-        "mode": 1, "think": 4,
-        "desc": "Alias for gemini-3.7-flash (backend upgraded)",
+        "mode": 1, "think": 10,
+        "desc": "Alias for gemini-3.8-flash (no longer in the web UI model picker)",
     },
     "gemini-2.5-flash": {
         "mode": 1, "think": 4,
@@ -181,8 +181,8 @@ MODELS = {
         "desc": "Experimental thinking mode",
     },
     "gemini-3.1-pro": {
-        "mode": 3, "think": 4,
-        "desc": "Pro model (requires cookie for real routing)",
+        "mode": 3, "think": 0,
+        "desc": "Gemini 3.1 Pro (mode 3, captured from the web UI model picker)",
     },
     "gemini-1.5-pro": {
         "mode": 3, "think": 4,
@@ -201,8 +201,8 @@ MODELS = {
         "desc": "Dynamic thinking with adaptive depth",
     },
     "gemini-flash-lite": {
-        "mode": 6, "think": 4,
-        "desc": "Lightweight fast model",
+        "mode": 6, "think": 8,
+        "desc": "Gemini 3.5 Flash-Lite (mode 6, captured from the web UI model picker)",
     },
     "imagen-3.0-generate-002": {
         "mode": 1, "think": 4, "is_image": True,
@@ -247,7 +247,7 @@ MODELS = {
 }
 
 
-def resolve_model(model_name: str, default: str = "gemini-3.7-flash"):
+def resolve_model(model_name: str, default: str = "gemini-3.8-flash"):
     """Resolve model name to (name, mode_id, think_mode, error, extra_fields)."""
     if not model_name:
         model_name = default
@@ -276,7 +276,7 @@ def resolve_model(model_name: str, default: str = "gemini-3.7-flash"):
         elif "auto" in lower:
             matched = "gemini-auto"
         elif "flash" in lower:
-            matched = "gemini-3.6-flash"
+            matched = "gemini-3.8-flash"
         else:
             matched = default
 

@@ -4,13 +4,25 @@
 #   1=FAST, 2=THINKING, 3=PRO, 4=AUTO, 5=FAST_DYNAMIC_THINKING, 6=FLASH_LITE
 
 MODELS = {
+    "gemini-4-argon": {
+        "mode": 8, "think": 9,
+        "desc": "Gemini 4 Argon (mode 8, captured from the web UI model picker)",
+    },
+    "gemini-3.8-flash": {
+        "mode": 1, "think": 10,
+        "desc": "Gemini 3.8 Flash (mode 1, captured from the web UI model picker)",
+    },
+    "gemini-3.7-flash": {
+        "mode": 1, "think": 10,
+        "desc": "Alias for gemini-3.8-flash (no longer in the web UI model picker)",
+    },
     "gemini-3.6-flash": {
-        "mode": 1, "think": 4,
-        "desc": "Latest all-around model (Gemini 3.6 Flash)",
+        "mode": 1, "think": 10,
+        "desc": "Alias for gemini-3.8-flash (no longer in the web UI model picker)",
     },
     "gemini-3.5-flash": {
-        "mode": 1, "think": 4,
-        "desc": "Alias for gemini-3.6-flash (backend upgraded)",
+        "mode": 1, "think": 10,
+        "desc": "Alias for gemini-3.8-flash (no longer in the web UI model picker)",
     },
     "gemini-2.5-flash": {
         "mode": 1, "think": 4,
@@ -33,8 +45,8 @@ MODELS = {
         "desc": "Experimental thinking mode",
     },
     "gemini-3.1-pro": {
-        "mode": 3, "think": 4,
-        "desc": "Pro model (requires cookie for real routing)",
+        "mode": 3, "think": 0,
+        "desc": "Gemini 3.1 Pro (mode 3, captured from the web UI model picker)",
     },
     "gemini-1.5-pro": {
         "mode": 3, "think": 4,
@@ -53,8 +65,8 @@ MODELS = {
         "desc": "Dynamic thinking with adaptive depth",
     },
     "gemini-flash-lite": {
-        "mode": 6, "think": 4,
-        "desc": "Lightweight fast model",
+        "mode": 6, "think": 8,
+        "desc": "Gemini 3.5 Flash-Lite (mode 6, captured from the web UI model picker)",
     },
     "imagen-3.0-generate-002": {
         "mode": 1, "think": 4, "is_image": True,
@@ -83,7 +95,7 @@ MODELS = {
 }
 
 
-def resolve_model(model_name: str, default: str = "gemini-3.6-flash"):
+def resolve_model(model_name: str, default: str = "gemini-3.8-flash"):
     """Resolve model name to (name, mode_id, think_mode, error, extra_fields).
 
     Supports exact matches, @think=N overrides, and fuzzy fallback based on model keywords
@@ -116,7 +128,7 @@ def resolve_model(model_name: str, default: str = "gemini-3.6-flash"):
         elif "auto" in lower:
             matched = "gemini-auto"
         elif "flash" in lower:
-            matched = "gemini-3.6-flash"
+            matched = "gemini-3.8-flash"
         else:
             matched = default
 
