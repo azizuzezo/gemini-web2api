@@ -143,6 +143,10 @@ MODELS = {
         "mode": 1, "think": 4,
         "desc": "Gemini 4 Argon (Flash category)",
     },
+    "gemini-3.8-flash": {
+        "mode": 1, "think": 4,
+        "desc": "Gemini 3.8 Flash (Flash category, released 2026-09)",
+    },
     "gemini-3.7-flash": {
         "mode": 1, "think": 4,
         "desc": "Latest all-around model (Gemini 3.7 Flash, confirmed current default of the 'Flash' category as of 2026-08)",
@@ -214,6 +218,14 @@ MODELS = {
     "dall-e-2": {
         "mode": 1, "think": 4, "is_image": True,
         "desc": "OpenAI DALL-E 2 alias (routes to Imagen 3)",
+    },
+    "nano-banana-2.1": {
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "Nano Banana 2.1 Image Generation model",
+    },
+    "nano_banana_2_1": {
+        "mode": 1, "think": 4, "is_image": True,
+        "desc": "Alias for nano-banana-2.1",
     },
     "nano-banana-2": {
         "mode": 1, "think": 4, "is_image": True,
