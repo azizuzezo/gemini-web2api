@@ -88,21 +88,32 @@ def next_reqid() -> int:
         return next(_reqid_counter) % 1000000
 
 
+# Gemini answers a throttled client with 429, but also with 503 or a 302
+# redirect (to its "unusual traffic" interstitial, which urllib reports as an
+# infinite-redirect HTTPError). All three mean "back off", not "retry now".
+THROTTLE_STATUSES = (429, 302, 503)
+
+
+def _error_status(err: Exception):
+    return getattr(err, "code", None) or getattr(getattr(err, "response", None), "status_code", None)
+
+
 def retry_sleep_sec(attempt: int, err: Exception = None) -> float:
-    """Exponential backoff with jitter; extra cautious on 429s so concurrent
-    retrying threads spread out instead of hammering the same window again."""
-    status = getattr(err, "code", None) or getattr(getattr(err, "response", None), "status_code", None)
+    """Exponential backoff with jitter; extra cautious on throttling statuses
+    so concurrent retrying threads spread out instead of hammering the same
+    window again."""
+    status = _error_status(err)
     base = CONFIG["retry_delay_sec"] * (2 ** attempt)
-    if status == 429:
+    if status in THROTTLE_STATUSES:
         base *= 3
     return min(base + random.uniform(0, CONFIG["retry_delay_sec"]), 30)
 
 
-# ─── Global 429 circuit breaker ─────────────────────────────────────────────
-# One request hitting a 429 means Gemini is already throttling us; letting
+# ─── Global throttle circuit breaker ─────────────────────────────────────────────
+# One request hitting a throttle status means Gemini is already limiting us; letting
 # every other in-flight/queued thread find that out independently (each on
 # its own retry timer) just re-triggers the same wall repeatedly. Instead,
-# the first thread to see a 429 posts a shared cooldown deadline that every
+# the first thread to see one posts a shared cooldown deadline that every
 # other attempt waits out before it even tries the network.
 
 _rate_limit_lock = threading.Lock()
@@ -551,7 +562,7 @@ def gemini_stream_generate(prompt: str, model_id: int, think_mode: int) -> str:
                 return resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as e:
             last_err = e
-            if e.code == 429:
+            if e.code in THROTTLE_STATUSES:
                 note_rate_limited(retry_sleep_sec(attempt, e))
             if e.code == 405 and refresh_session_if_needed():
                 log("Retrying with refreshed session...")
@@ -687,7 +698,7 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
                                     pass
             return
         except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
+            status = _error_status(e)
             if status == 405 and refresh_session_if_needed():
                 log("Session refreshed, falling back to non-streaming for this request")
                 raw = gemini_stream_generate(prompt, model_id, think_mode)
@@ -701,7 +712,7 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
                 raise
             last_err = e
             delay = retry_sleep_sec(attempt, e)
-            if status == 429:
+            if status in THROTTLE_STATUSES:
                 note_rate_limited(delay)
             if attempt < CONFIG["retry_attempts"] - 1:
                 log(f"Stream retry {attempt+1}/{CONFIG['retry_attempts']}: {e} (waiting {delay:.1f}s)")
