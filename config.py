@@ -19,6 +19,17 @@ CHANNEL_ROLES = 1568203759375351908       # ╰・🛡️・verifikasi-kreator
 CHANNEL_CHAT = 1568182411874017292        # ╭・💬・ngobrol-santai
 CHANNEL_LOGS = 1568203782276382770        # ╰・📋・bot-logs
 
+# ==========================================
+# TIKTOK MONITOR (LIVE + VIDEO BARU)
+# ==========================================
+TIKTOK_USERNAME = os.getenv("TIKTOK_USERNAME", "alfiqojundullah")
+# Kosongkan = bot membuat channel read-only otomatis (ID disimpan di tiktok_state.json)
+CHANNEL_TIKTOK = int(os.getenv("DISCORD_CHANNEL_TIKTOK", 0))
+# RSS feed video akun (mis. RSSHub self-host: https://<host>/tiktok/user/@alfiqojundullah)
+TIKTOK_VIDEO_FEED_URL = os.getenv("TIKTOK_VIDEO_FEED_URL", f"https://rsshub.app/tiktok/user/@{TIKTOK_USERNAME}")
+TIKTOK_POLL_SECONDS = int(os.getenv("TIKTOK_POLL_SECONDS", 120))
+TIKTOK_PING_EVERYONE = os.getenv("TIKTOK_PING_EVERYONE", "0") == "1"
+
 # ID Roles Resmi Server
 ROLE_FOUNDER = 1568184248312275046         # 👑 Founder
 ROLE_MODERATOR = 1568185534352859207       # 🛡️ Moderator

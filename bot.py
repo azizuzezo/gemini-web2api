@@ -25,6 +25,7 @@ import re
 
 import config
 import ai_service
+from tiktok_monitor import TikTokMonitor
 
 intents = discord.Intents.default()
 intents.members = True
@@ -42,6 +43,17 @@ class BalikLayarBot(commands.Bot):
         print("✅ Slash Commands berhasil disinkronkan ke server BalikLayar AI!")
 
 bot = BalikLayarBot()
+tiktok_monitor = TikTokMonitor(bot)
+
+
+# Channel verifikasi hanya untuk tombol: tutup thread yang dibuat member di sana.
+@bot.event
+async def on_thread_create(thread: discord.Thread):
+    if thread.parent_id == config.CHANNEL_ROLES:
+        try:
+            await thread.delete(reason="Thread tidak diizinkan di channel verifikasi")
+        except Exception as e:
+            print(f"❌ Gagal menghapus thread di verifikasi: {e}")
 
 # ====================================================================
 # 1. PERSISTENT VIEW - AUTO-VERIFIKASI REAL HUMAN (INSTAN & BERSIH)
@@ -144,6 +156,22 @@ async def on_ready():
         name="Komunitas BalikLayar AI 🛡️"
     )
     await bot.change_presence(status=discord.Status.online, activity=activity)
+    tiktok_monitor.start()
+
+    # Kunci channel verifikasi: member tidak bisa membuat thread / mengirim chat
+    guild = bot.get_guild(config.GUILD_ID)
+    verif_ch = guild.get_channel(config.CHANNEL_ROLES) if guild else None
+    if verif_ch:
+        try:
+            await verif_ch.set_permissions(
+                guild.default_role,
+                create_public_threads=False,
+                create_private_threads=False,
+                send_messages_in_threads=False,
+                reason="Verifikasi: nonaktifkan pembuatan thread",
+            )
+        except Exception as e:
+            print(f"⚠️ Gagal mengunci thread di channel verifikasi: {e}")
 
     logs_ch = bot.get_channel(config.CHANNEL_LOGS)
     if logs_ch:
