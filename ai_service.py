@@ -1,14 +1,16 @@
 import os
 import aiohttp
 import json
+import datetime
 import config
 
 SYSTEM_PROMPT = """Kamu adalah BalikLayar AI Assistant, asisten resmi komunitas kreator video AI dan affiliate duacincin.id / BalikLayar AI.
 
 Keahlian & Karaktermu:
-1. Sebagai Asisten Komunitas yang Pintar:
+1. Sebagai Asisten Komunitas yang Pintar & Punya Ingatan Permanen:
    - Kamu memiliki akses ke Dokumen Knowledge Base Resmi dan Context Real-Time server.
-   - Kamu tahu informasi status server, jumlah member real-time, aturan server, rekomendasi tools, channel penting, dan profil Founder (Alfiqo).
+   - Kamu mengingat semua instruksi atau ilmu yang diajarkan oleh Founder (Alfiqo) dan Moderator melalui command /train atau memori chat.
+   - Kamu tahu informasi status server, jumlah member real-time, aturan server, rekomendasi tools, channel penting, dan profil Founder.
    - Jika ditanya "cek status", "status bot", "info server", atau pertanyaan seputar komunitas, jawab dengan ramah, akurat, dan percaya diri berdasarkan Knowledge Base.
 2. Sebagai Mentor Kreator & Affiliate:
    - Menguasai ide konten video pendek (TikTok, Reels, Shorts), hook 3 detik pertama (pattern interrupt), retention, dan strategi affiliate marketing konversi tinggi.
@@ -21,9 +23,12 @@ Gaya berkomunikasi:
 - Jangan melebihi 1800 karakter agar muat dalam satu pesan Discord.
 """
 
-def get_knowledge_base() -> str:
+def get_knowledge_path() -> str:
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    k_path = os.path.join(base_dir, "knowledge.md")
+    return os.path.join(base_dir, "knowledge.md")
+
+def get_knowledge_base() -> str:
+    k_path = get_knowledge_path()
     if os.path.exists(k_path):
         try:
             with open(k_path, "r", encoding="utf-8") as f:
@@ -32,14 +37,34 @@ def get_knowledge_base() -> str:
             pass
     return ""
 
-async def query_ai(prompt: str, user_name: str = "Kreator", server_context: str = "") -> str:
-    # Siapkan gabungan Knowledge Base dan Server Context
+def add_training_memory(topik: str, informasi: str, author_name: str) -> bool:
+    """Menyimpan pengetahuan baru yang diajarkan Founder/Moderator ke knowledge.md secara permanen."""
+    k_path = get_knowledge_path()
+    now_str = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
+    entry = (
+        f"\n\n### 🧠 [Ingatan Baru - {topik.strip()}]\n"
+        f"- **Diajarkan oleh:** {author_name}\n"
+        f"- **Waktu:** {now_str}\n"
+        f"- **Pengetahuan:** {informasi.strip()}\n"
+    )
+    try:
+        with open(k_path, "a", encoding="utf-8") as f:
+            f.write(entry)
+        return True
+    except Exception as e:
+        print(f"Error saving training memory: {e}")
+        return False
+
+async def query_ai(prompt: str, user_name: str = "Kreator", server_context: str = "", chat_history: str = "") -> str:
+    # Siapkan gabungan Knowledge Base, Server Context, dan Riwayat Obrolan
     k_data = get_knowledge_base()
     context_addon = ""
     if k_data:
-        context_addon += f"\n\n[DOKUMEN KNOWLEDGE BASE RESMI]:\n{k_data}"
+        context_addon += f"\n\n[DOKUMEN KNOWLEDGE BASE RESMI & INGATAN PERMANEN]:\n{k_data}"
     if server_context:
         context_addon += f"\n\n[CONTEXT REAL-TIME SERVER BALIKLAYAR AI]:\n{server_context}"
+    if chat_history:
+        context_addon += f"\n\n[RIWAYAT CHAT SEBELUMNYA]:\n{chat_history}"
 
     full_user_content = f"Pertanyaan dari {user_name}:\n{prompt}{context_addon}"
 
