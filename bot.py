@@ -227,12 +227,60 @@ async def on_ready():
 # 3. AUTO-MOD: DETEKSI JUALAN TOOLS & AUTO-KICK
 # ====================================================================
 
-SELLING_PATTERNS = [
-    r"(?i)\b(jual|dijual|ready|open\s*order|sewa|promo|diskon|murmer|murah|minat\s*(pm|dm)|dm\s*me)\b.*\b(akun|tools|gemini|capcut|canva|chatgpt|gpt|claude|midjourney|freepik|envato)\b",
-    r"(?i)\b(gemini|capcut|canva|chatgpt|claude|midjourney|freepik)\b.*\b(pro|premium|private|sharing|murah|harga|dm|pm|wa|order|minat)\b",
-    r"(?i)\b(jual\s+akun|ready\s+akun|jual\s+tools|ready\s+tools|sewa\s+akun|akun\s+pro|tools\s+pro)\b",
-    r"(?i)\b(\d+k|\d+rb|rp\.?\s*\d+)\b.*\b(akun|tools|pro|gemini|capcut|canva|chatgpt|claude)\b"
-]
+# --- Tahap 1: saringan cepat (tidak peduli urutan kata, posisi, atau baris baru) ---
+_PRODUCT_RE = re.compile(
+    r"gemini|capcut|canva|chat\s*gpt|\bgpt\b|claude|midjourney|freepik|envato|grok|perplexity|veo|"
+    r"\bakun\b|\btools?\b|premium|\bpro\b|lisensi|license|sharing|private|"
+    r"netflix|spotify|youtube\s*premium|vpn", re.I)
+_SALES_RE = re.compile(
+    r"\bjual\b|dijual|jualan|\bready\b|open\s*order|\bpo\b|\bsewa\b|disewakan|promo|diskon|murmer|murah|"
+    r"harga|\border\b|pesan\s*sekarang|garansi|testi|bergaransi|stok|slot|\bdm\b|\bpm\b|"
+    r"hubungi|chat\s*(?:me|aku|saya)|wa\.me|whatsapp|\bwa\b|t\.me|telegram|minat|"
+    r"\b\d+\s*(?:k|rb|ribu)\b|rp\.?\s*\d+", re.I)
+_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
+
+
+def looks_like_selling(text: str) -> bool:
+    t = _ZERO_WIDTH_RE.sub("", text)
+    return bool(_PRODUCT_RE.search(t) and _SALES_RE.search(t))
+
+
+# --- Tahap 2: AI menilai konteks. Kick HANYA jika AI yakin ini jualan. ---
+SELLING_KICK_CONFIDENCE = 80
+
+
+async def detect_selling(message: discord.Message):
+    """Return (is_violation, alasan). Tidak pernah kick jika AI gagal atau ragu: kasus itu dikirim ke #bot-logs untuk review staff."""
+    content = message.content or ""
+    if len(content) < 8 or not looks_like_selling(content):
+        return False, ""
+
+    result = await ai_service.classify_selling(content)
+
+    async def flag_for_review(title: str, reason: str):
+        logs_ch = bot.get_channel(config.CHANNEL_LOGS)
+        if not logs_ch:
+            return
+        emb = discord.Embed(title=title, color=0xF1C40F, timestamp=datetime.datetime.now(datetime.timezone.utc))
+        emb.add_field(name="👤 Penulis", value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
+        emb.add_field(name="📍 Pesan", value=f"[Lompat ke pesan]({message.jump_url})", inline=True)
+        emb.add_field(name="🧠 Analisis AI", value=reason or "-", inline=False)
+        emb.add_field(name="📝 Isi", value=f"```{content[:900]}```", inline=False)
+        try:
+            await logs_ch.send(embed=emb)
+        except Exception:
+            pass
+
+    if result is None:
+        await flag_for_review("⚠️ Pesan mencurigakan (AI tidak bisa menganalisis, tidak ada tindakan)", "AI tidak merespons / output tidak valid")
+        return False, ""
+    if not result["selling"]:
+        return False, result["reason"]
+    if result["confidence"] < SELLING_KICK_CONFIDENCE:
+        await flag_for_review(f"🔎 Kemungkinan jualan, perlu review staff (yakin {result['confidence']}%)", result["reason"])
+        return False, result["reason"]
+    return True, f"{result['reason']} (yakin {result['confidence']}%)"
+
 
 def build_server_context(guild: discord.Guild, member: discord.Member, channel) -> str:
     if not guild:
@@ -270,7 +318,7 @@ async def on_message(message: discord.Message):
 
     # 1. AUTO-MOD CHECK: Khusus member biasa (Staff bebas memposting)
     if not is_staff:
-        is_violation = any(re.search(p, content) for p in SELLING_PATTERNS)
+        is_violation, ai_reason = await detect_selling(message)
         if is_violation:
             try:
                 await message.delete()
@@ -316,6 +364,7 @@ async def on_message(message: discord.Message):
                 log_embed.add_field(name="👤 Pelanggar", value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
                 log_embed.add_field(name="📍 Channel", value=message.channel.mention, inline=True)
                 log_embed.add_field(name="📝 Isi Pesan", value=f"```{content[:1000]}```", inline=False)
+                log_embed.add_field(name="🧠 Analisis AI", value=ai_reason or "-", inline=False)
                 log_embed.add_field(name="⚡ Tindakan", value="Pesan Dihapus + User Di-KICK Otomatis", inline=False)
                 await logs_ch.send(embed=log_embed)
 
