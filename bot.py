@@ -74,74 +74,113 @@ class HumanVerificationView(discord.ui.View):
         if not guild:
             return
 
-        # Ambil data member terbaru langsung dari Discord API agar role akurat
-        try:
-            member = await guild.fetch_member(interaction.user.id)
-        except Exception:
-            member = interaction.user
-
-        role_kreator = guild.get_role(config.ROLE_KREATOR)
-        role_unverified = guild.get_role(config.ROLE_UNVERIFIED)
-
-        if not role_kreator:
-            await interaction.response.send_message("❌ Role `🚀 Kreator` tidak ditemukan di server.", ephemeral=True)
+        # Syarat umur akun: tolak akun yang terlalu baru (biasanya bot/akun spam)
+        age_days = (discord.utils.utcnow() - interaction.user.created_at).days
+        if age_days < config.VERIFY_MIN_ACCOUNT_DAYS:
+            await interaction.response.send_message(
+                f"⏳ Akun Discord kamu baru berumur **{age_days} hari**. "
+                f"Verifikasi dibuka untuk akun berumur minimal **{config.VERIFY_MIN_ACCOUNT_DAYS} hari**. "
+                "Coba lagi nanti ya, atau hubungi Moderator kalau ini akun utamamu.",
+                ephemeral=True
+            )
+            logs_ch = bot.get_channel(config.CHANNEL_LOGS)
+            if logs_ch:
+                await logs_ch.send(embed=discord.Embed(
+                    title="⏳ Verifikasi Ditolak (Akun Terlalu Baru)",
+                    description=f"**User**: {interaction.user.mention} (`{interaction.user.id}`)\n**Umur akun**: {age_days} hari",
+                    color=0xF1C40F,
+                    timestamp=datetime.datetime.now(datetime.timezone.utc)
+                ))
             return
 
-        # 1. Hapus role ⏳ Unverified secara mutlak jika masih menempel
-        unverified_removed = False
-        if role_unverified and role_unverified in member.roles:
-            try:
-                await member.remove_roles(role_unverified, reason="Verifikasi Sukses: Unverified dicopot")
-                unverified_removed = True
-                print(f"✓ Role Unverified berhasil dicopot dari {member.name}")
-            except Exception as e:
-                print(f"❌ Gagal mencopot role Unverified dari {member.name}: {e}")
+        await interaction.response.send_modal(VerifyQuestionModal())
 
-        # 2. Pasang role 🚀 Kreator jika belum punya
-        kreator_added = False
-        if role_kreator not in member.roles:
-            try:
-                await member.add_roles(role_kreator, reason="Verifikasi Sukses: Role Kreator aktif")
-                kreator_added = True
-                print(f"✓ Role Kreator berhasil dipasang ke {member.name}")
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "⚠️ **Izin Bot Terhalang**: Pastikan role `BalikLayar Bot` berada di atas role `🚀 Kreator` di Server Settings > Roles.",
-                    ephemeral=True
-                )
-                return
-            except Exception as e:
-                await interaction.response.send_message(f"❌ Terjadi kesalahan saat verifikasi: {e}", ephemeral=True)
-                return
 
-        # 3. Berikan pesan konfirmasi
-        success_embed = discord.Embed(
-            title="🎉 Verifikasi Real Human Berhasil!",
-            description=(
-                f"Selamat {member.mention}! Akunmu telah berhasil diverifikasi oleh sistem.\n\n"
-                "**Status Keanggotaan:**\n"
-                "• Status: **Real Human (Terverifikasi)**\n"
-                "• Role aktif: **🚀 Kreator**\n"
-                "• Status lama: `⏳ Unverified` *(telah dicopot)*\n\n"
-                "Seluruh channel komunitas, ide video AI, dan resource affiliate sekarang telah terbuka penuh!\n\n"
-                "Silakan mulai berdiskusi di <#1568182411874017292> atau intip tren video di <#1568188713463451709>! 🚀"
-            ),
-            color=0x2ECC71
-        )
-        await interaction.response.send_message(embed=success_embed, ephemeral=True)
+class VerifyQuestionModal(discord.ui.Modal, title="Verifikasi Real Human"):
+    def __init__(self):
+        super().__init__()
+        a, b = random.randint(2, 9), random.randint(2, 9)
+        self.answer = a + b
+        self.jawaban = discord.ui.TextInput(label=f"Berapa {a} + {b} ?", max_length=3, required=True)
+        self.add_item(self.jawaban)
 
-        # 4. Catat ke #bot-logs
-        logs_ch = bot.get_channel(config.CHANNEL_LOGS)
-        if logs_ch:
-            log_embed = discord.Embed(
-                title="✅ Member Terverifikasi Otomatis (Real Human)",
-                description=f"**User**: {member.mention} (`{member.id}`)\n**Role Diberikan**: `🚀 Kreator`\n**Role Dicopot**: `⏳ Unverified`",
-                color=0x2ECC71,
-                timestamp=datetime.datetime.now(datetime.timezone.utc)
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.jawaban.value.strip() != str(self.answer):
+            await interaction.response.send_message("❌ Jawaban salah. Klik tombol verifikasi lagi untuk mencoba ulang.", ephemeral=True)
+            return
+        await complete_verification(interaction)
+
+
+async def complete_verification(interaction: discord.Interaction):
+    guild = interaction.guild
+    # Ambil data member terbaru langsung dari Discord API agar role akurat
+    try:
+        member = await guild.fetch_member(interaction.user.id)
+    except Exception:
+        member = interaction.user
+
+    role_kreator = guild.get_role(config.ROLE_KREATOR)
+    role_unverified = guild.get_role(config.ROLE_UNVERIFIED)
+
+    if not role_kreator:
+        await interaction.response.send_message("❌ Role `🚀 Kreator` tidak ditemukan di server.", ephemeral=True)
+        return
+
+    # 1. Hapus role ⏳ Unverified secara mutlak jika masih menempel
+    unverified_removed = False
+    if role_unverified and role_unverified in member.roles:
+        try:
+            await member.remove_roles(role_unverified, reason="Verifikasi Sukses: Unverified dicopot")
+            unverified_removed = True
+            print(f"✓ Role Unverified berhasil dicopot dari {member.name}")
+        except Exception as e:
+            print(f"❌ Gagal mencopot role Unverified dari {member.name}: {e}")
+
+    # 2. Pasang role 🚀 Kreator jika belum punya
+    kreator_added = False
+    if role_kreator not in member.roles:
+        try:
+            await member.add_roles(role_kreator, reason="Verifikasi Sukses: Role Kreator aktif")
+            kreator_added = True
+            print(f"✓ Role Kreator berhasil dipasang ke {member.name}")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "⚠️ **Izin Bot Terhalang**: Pastikan role `BalikLayar Bot` berada di atas role `🚀 Kreator` di Server Settings > Roles.",
+                ephemeral=True
             )
-            if member.avatar:
-                log_embed.set_thumbnail(url=member.avatar.url)
-            await logs_ch.send(embed=log_embed)
+            return
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Terjadi kesalahan saat verifikasi: {e}", ephemeral=True)
+            return
+
+    # 3. Berikan pesan konfirmasi
+    success_embed = discord.Embed(
+        title="🎉 Verifikasi Real Human Berhasil!",
+        description=(
+            f"Selamat {member.mention}! Akunmu telah berhasil diverifikasi oleh sistem.\n\n"
+            "**Status Keanggotaan:**\n"
+            "• Status: **Real Human (Terverifikasi)**\n"
+            "• Role aktif: **🚀 Kreator**\n"
+            "• Status lama: `⏳ Unverified` *(telah dicopot)*\n\n"
+            "Seluruh channel komunitas, ide video AI, dan resource affiliate sekarang telah terbuka penuh!\n\n"
+            "Silakan mulai berdiskusi di <#1568182411874017292> atau intip tren video di <#1568188713463451709>! 🚀"
+        ),
+        color=0x2ECC71
+    )
+    await interaction.response.send_message(embed=success_embed, ephemeral=True)
+
+    # 4. Catat ke #bot-logs
+    logs_ch = bot.get_channel(config.CHANNEL_LOGS)
+    if logs_ch:
+        log_embed = discord.Embed(
+            title="✅ Member Terverifikasi Otomatis (Real Human)",
+            description=f"**User**: {member.mention} (`{member.id}`)\n**Role Diberikan**: `🚀 Kreator`\n**Role Dicopot**: `⏳ Unverified`",
+            color=0x2ECC71,
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        if member.avatar:
+            log_embed.set_thumbnail(url=member.avatar.url)
+        await logs_ch.send(embed=log_embed)
 
 
 # ====================================================================
@@ -374,6 +413,22 @@ async def on_member_join(member: discord.Member):
             embed.set_thumbnail(url=member.avatar.url)
         embed.set_footer(text="BalikLayar AI • Creative Hub", icon_url=guild.icon.url if guild.icon else None)
         await welcome_ch.send(content=f"Selamat datang {member.mention}! 🎉", embed=embed)
+
+    # DM selamat datang berisi langkah awal (diabaikan jika DM member tertutup)
+    try:
+        await member.send(embed=discord.Embed(
+            title="👋 Selamat datang di BalikLayar AI!",
+            description=(
+                "Biar akses komunitasmu terbuka penuh, ikuti 3 langkah ini:\n\n"
+                f"1. 📜 Baca aturan di <#{config.CHANNEL_RULES}>\n"
+                f"2. 🛡️ Verifikasi di <#{config.CHANNEL_ROLES}> (klik tombol hijau, jawab 1 pertanyaan singkat)\n"
+                f"3. 💬 Kenalan di <#{config.CHANNEL_CHAT}>\n\n"
+                "Tanya apa saja seputar video AI & affiliate: mention bot atau pakai `/tanya-ai`. 🚀"
+            ),
+            color=0x5865F2
+        ))
+    except Exception:
+        pass
 
     logs_ch = bot.get_channel(config.CHANNEL_LOGS)
     if logs_ch:

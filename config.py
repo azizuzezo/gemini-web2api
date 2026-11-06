@@ -28,6 +28,9 @@ CHANNEL_TIKTOK = int(os.getenv("DISCORD_CHANNEL_TIKTOK", 1568308183187853355))  
 TIKTOK_POLL_SECONDS = int(os.getenv("TIKTOK_POLL_SECONDS", 120))
 TIKTOK_PING_EVERYONE = os.getenv("TIKTOK_PING_EVERYONE", "0") == "1"
 
+# Verifikasi: umur akun Discord minimal (hari) agar bisa verifikasi
+VERIFY_MIN_ACCOUNT_DAYS = int(os.getenv("VERIFY_MIN_ACCOUNT_DAYS", 3))
+
 # ID Roles Resmi Server
 ROLE_FOUNDER = 1568184248312275046         # 👑 Founder
 ROLE_MODERATOR = 1568185534352859207       # 🛡️ Moderator
