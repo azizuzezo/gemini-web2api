@@ -180,8 +180,8 @@ def build_server_context(guild: discord.Guild, member: discord.Member, channel) 
         f"- Total Anggota Saat Ini: {member_count} member aktif\n"
         f"- Status Bot: Online 24/7 di Cloud Node SairiHost (AMD EPYC, latency normal, operasional penuh)\n"
         f"- Saluran Tempat Bertanya: #{channel_name}\n"
-        f"- Penanya: {member.display_name} (Role: {roles_str})\n"
-        f"- Founder / Pemilik: Alfiqo (BalikLayar.id / duacincin.id)\n"
+        f"- Penanya: {member.display_name} (Mention Penanya: <@{member.id}>, Role: {roles_str})\n"
+        f"- Founder / Pemilik: Alfiqo (Mention Founder: <@799987598726135818>)\n"
         f"- Fitur Aktif: Auto-Verifikasi Real Human di #verifikasi-kreator & Auto-Kick jualan akun liar\n"
         f"- Saluran Utama: #welcome, #rules, #pengumuman, #ngobrol-santai, #ide-dan-tren, #tanya-jawab, #pamer-komisi, #showcase-video, #resource-share"
     )
@@ -257,8 +257,7 @@ async def on_message(message: discord.Message):
         clean_text = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
         if not clean_text:
             await message.reply(
-                "Halo! 👋 Ada yang bisa saya bantu seputar konten video AI, strategi affiliate, atau cek status server hari ini?\n"
-                "Ketik pertanyaanmu langsung atau gunakan command `/tanya-ai`! 🚀"
+                "Ada yang bisa dibantu seputar video AI atau strategi affiliate hari ini? Langsung sebut aja topik atau pertanyaan yang mau kamu bahas! 🚀"
             )
             return
 
@@ -298,7 +297,8 @@ async def on_message(message: discord.Message):
             ai_reply = await ai_service.query_ai(clean_text, message.author.display_name, server_context=ctx, chat_history=chat_history)
             if len(ai_reply) > 1950:
                 ai_reply = ai_reply[:1940] + "...\n*(terpotong batas Discord)*"
-            await message.reply(ai_reply, mention_author=True)
+            allowed = discord.AllowedMentions(users=True, roles=True, everyone=False, replied_user=True)
+            await message.reply(ai_reply, mention_author=True, allowed_mentions=allowed)
         return
 
     await bot.process_commands(message)
@@ -479,7 +479,8 @@ async def cmd_tanya_ai(interaction: discord.Interaction, pertanyaan: str):
     reply = await ai_service.query_ai(pertanyaan, interaction.user.display_name, server_context=ctx)
     if len(reply) > 1950:
         reply = reply[:1940] + "...\n*(terpotong batas Discord)*"
-    await interaction.followup.send(reply)
+    allowed = discord.AllowedMentions(users=True, roles=True, everyone=False)
+    await interaction.followup.send(reply, allowed_mentions=allowed)
 
 
 
@@ -497,7 +498,8 @@ async def cmd_ide_konten(interaction: discord.Interaction, niche: str):
     reply = await ai_service.query_ai(prompt, interaction.user.display_name)
     if len(reply) > 1950:
         reply = reply[:1940] + "...\n*(terpotong batas Discord)*"
-    await interaction.followup.send(reply)
+    allowed = discord.AllowedMentions(users=True, roles=True, everyone=False)
+    await interaction.followup.send(reply, allowed_mentions=allowed)
 
 
 @bot.tree.command(name="bedah-hook", description="Bedah naskah hook video kamu dan berikan 3 alternatif yang lebih mematikan")
@@ -512,7 +514,8 @@ async def cmd_bedah_hook(interaction: discord.Interaction, hook: str):
     reply = await ai_service.query_ai(prompt, interaction.user.display_name)
     if len(reply) > 1950:
         reply = reply[:1940] + "...\n*(terpotong batas Discord)*"
-    await interaction.followup.send(reply)
+    allowed = discord.AllowedMentions(users=True, roles=True, everyone=False)
+    await interaction.followup.send(reply, allowed_mentions=allowed)
 
 
 @bot.tree.command(name="train", description="Ajarkan pengetahuan/fakta baru ke memori permanen AI BalikLayar (Khusus Staff)")

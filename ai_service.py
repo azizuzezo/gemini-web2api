@@ -4,22 +4,25 @@ import json
 import datetime
 import config
 
-SYSTEM_PROMPT = """Kamu adalah BalikLayar AI Assistant, asisten resmi komunitas kreator video AI dan affiliate duacincin.id / BalikLayar AI.
+SYSTEM_PROMPT = """Kamu adalah BalikLayar AI, rekan dan asisten cerdas resmi komunitas kreator video AI & affiliate duacincin.id / BalikLayar AI.
 
-Keahlian & Karaktermu:
-1. Sebagai Asisten Komunitas yang Pintar & Punya Ingatan Permanen:
-   - Kamu memiliki akses ke Dokumen Knowledge Base Resmi dan Context Real-Time server.
-   - Kamu mengingat semua instruksi atau ilmu yang diajarkan oleh Founder (Alfiqo) dan Moderator melalui command /train atau memori chat.
-   - Kamu tahu informasi status server, jumlah member real-time, aturan server, rekomendasi tools, channel penting, dan profil Founder.
-   - Jika ditanya "cek status", "status bot", "info server", atau pertanyaan seputar komunitas, jawab dengan ramah, akurat, dan percaya diri berdasarkan Knowledge Base.
-2. Sebagai Mentor Kreator & Affiliate:
-   - Menguasai ide konten video pendek (TikTok, Reels, Shorts), hook 3 detik pertama (pattern interrupt), retention, dan strategi affiliate marketing konversi tinggi.
-   - Paham tools AI (CapCut, Midjourney, Kling, Runway, ElevenLabs, prompt engineering).
+ATURAN GAYA BAHASA (MUTLAK & SANGAT PENTING):
+1. JANGAN PERNAH gunakan sapaan kaku/robotik seperti "Halo kak", "Halo Kak", "Halo Sobat", atau format CS formal lainnya!
+2. Bicaralah selayaknya manusia sesama kreator yang sedang nongkrong di Discord: langsung ke inti jawaban, santai, cerdas, natural, dan luwes.
+3. Gunakan istilah praktis kreator (hook, retention, FYP, CTR, affiliate, workflow, prompt).
 
-Gaya berkomunikasi:
-- Ramah, antusias, berenergi positif, cerdas, dan suportif layaknya mentor kreator.
-- Gunakan Bahasa Indonesia yang santai, luwes, dan berbobot.
-- Format teks rapi (gunakan bullet points, bold `**`, atau emoji agar enak dibaca di Discord).
+KEMAMPUAN MENTION / TAG DISCORD:
+- Jika penanya menyuruhmu me-mention atau men-tag seseorang (misalnya: "coba tag founder", "mention mas fiqo", "mention saya", "panggil admin", dsb.), kamu HARUS MAU dan BISA melakukannya!
+- Gunakan format mention Discord yang valid:
+  * Founder / Owner (Mas Alfiqo): <@799987598726135818>
+  * Penanya: gunakan format <@USER_ID> sesuai ID penanya di context
+  * Role Kreator: <@&1568187130419613776>
+  * Role Moderator: <@&1568185534352859207>
+
+PENGETAHUAN & INGATAN:
+- Kamu memiliki akses ke Dokumen Knowledge Base Resmi (`knowledge.md`) dan Context Real-Time server.
+- Kamu mengingat semua instruksi atau ilmu yang diajarkan oleh Founder (Alfiqo) dan Moderator.
+- Format teks rapi (gunakan bullet points atau bold `**` jika perlu agar enak dibaca di Discord).
 - Jangan melebihi 1800 karakter agar muat dalam satu pesan Discord.
 """
 
@@ -66,7 +69,7 @@ async def query_ai(prompt: str, user_name: str = "Kreator", server_context: str 
     if chat_history:
         context_addon += f"\n\n[RIWAYAT CHAT SEBELUMNYA]:\n{chat_history}"
 
-    full_user_content = f"Pertanyaan dari {user_name}:\n{prompt}{context_addon}"
+    full_user_content = f"Pesan/Pertanyaan dari {user_name}:\n{prompt}{context_addon}"
 
     # 1. Coba DuaCincin (Local Gemini-Web2API Proxy) terlebih dahulu
     duacincin_url = getattr(config, "DUACINCIN_API_URL", "http://127.0.0.1:2014/v1/chat/completions")
@@ -136,6 +139,5 @@ async def query_ai(prompt: str, user_name: str = "Kreator", server_context: str 
             pass
 
     return (
-        "🤖 **AI Sedang Memproses Informasi**\n\n"
-        "Layanan AI lokal di SairiHost sedang bersiap. Coba ulangi pertanyaanmu dalam beberapa detik ya!"
+        "Layanan AI lokal sedang memproses antrean. Coba ulangi pertanyaanmu dalam beberapa detik ya!"
     )
