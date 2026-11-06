@@ -27,6 +27,9 @@ PROFILE_URL = f"https://www.tiktok.com/@{config.TIKTOK_USERNAME}"
 LIVE_URL = f"{PROFILE_URL}/live"
 
 
+_feed_warned = False
+
+
 def _load_state() -> dict:
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -77,7 +80,10 @@ async def fetch_latest_videos() -> list[dict]:
             r.raise_for_status()
         root = ET.fromstring(r.text)
     except Exception as e:
-        print(f"⚠️ Gagal ambil feed video TikTok: {e}")
+        global _feed_warned
+        if not _feed_warned:  # cukup sekali agar log tidak spam
+            print(f"⚠️ Gagal ambil feed video TikTok ({feed}): {e}")
+            _feed_warned = True
         return []
 
     videos = []
@@ -206,3 +212,18 @@ class TikTokMonitor:
         if new:
             self.state["seen_videos"] = list(seen)[-100:]
             _save_state(self.state)
+
+    async def announce_video(self, url: str, note: str = "") -> bool:
+        """Umumkan video secara manual ke channel TikTok (dipakai /tiktok-post)."""
+        guild = self.bot.get_guild(config.GUILD_ID)
+        ch = await self.ensure_channel(guild) if guild else None
+        if not ch:
+            return False
+        embed = discord.Embed(
+            title=f"🎬 Video baru dari @{config.TIKTOK_USERNAME}",
+            description=note[:300] or "Video baru telah diposting!",
+            url=url,
+            color=0x00F2EA,
+        )
+        await ch.send(url, embed=embed)
+        return True
