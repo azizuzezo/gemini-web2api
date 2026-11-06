@@ -2,22 +2,18 @@
 Pemantau TikTok untuk BalikLayar AI.
 
 - Deteksi LIVE akun TikTok (via yt-dlp) -> kirim notifikasi ke channel read-only.
-- Deteksi VIDEO BARU (via RSS feed, mis. RSSHub) -> kirim notifikasi ke channel yang sama.
 - Channel read-only dibuat otomatis oleh bot (member hanya bisa membaca).
 
 Konfigurasi lewat environment variable (lihat config.py):
-  TIKTOK_USERNAME, TIKTOK_VIDEO_FEED_URL, TIKTOK_POLL_SECONDS
+  TIKTOK_USERNAME, TIKTOK_POLL_SECONDS
 """
 
 import asyncio
 import json
 import os
-import re
 import sys
-import xml.etree.ElementTree as ET
 
 import discord
-import httpx
 from discord.ext import tasks
 
 import config
@@ -25,9 +21,6 @@ import config
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tiktok_state.json")
 PROFILE_URL = f"https://www.tiktok.com/@{config.TIKTOK_USERNAME}"
 LIVE_URL = f"{PROFILE_URL}/live"
-
-
-_feed_warned = False
 
 
 def _load_state() -> dict:
@@ -67,34 +60,6 @@ async def check_live() -> bool | None:
         return False
     print(f"⚠️ TikTok live check gagal: {err.decode(errors='ignore')[:200]}")
     return None
-
-
-async def fetch_latest_videos() -> list[dict]:
-    """Ambil daftar video terbaru dari RSS feed. Return list {id, title, url} (terbaru dulu)."""
-    feed = config.TIKTOK_VIDEO_FEED_URL
-    if not feed:
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            r = await client.get(feed, headers={"User-Agent": "BalikLayarBot/1.0 (+discord)"})
-            r.raise_for_status()
-        root = ET.fromstring(r.text)
-    except Exception as e:
-        global _feed_warned
-        if not _feed_warned:  # cukup sekali agar log tidak spam
-            print(f"⚠️ Gagal ambil feed video TikTok ({feed}): {e}")
-            _feed_warned = True
-        return []
-
-    videos = []
-    for item in root.iter("item"):
-        link = (item.findtext("link") or "").strip()
-        m = re.search(r"/video/(\d+)", link)
-        vid = m.group(1) if m else (item.findtext("guid") or link)
-        title = re.sub(r"<[^>]+>", "", item.findtext("title") or "").strip()
-        if vid and link:
-            videos.append({"id": vid, "title": title, "url": link})
-    return videos
 
 
 class TikTokMonitor:
@@ -145,7 +110,7 @@ class TikTokMonitor:
                 "┃・🎬・tiktok-alfiqo",
                 overwrites=overwrites,
                 category=category,
-                topic=f"Notifikasi otomatis LIVE & video baru TikTok @{config.TIKTOK_USERNAME} (read-only)",
+                topic=f"Notifikasi otomatis LIVE TikTok @{config.TIKTOK_USERNAME} (read-only)",
                 reason="Channel read-only notifikasi TikTok",
             )
         except Exception as e:
@@ -164,7 +129,7 @@ class TikTokMonitor:
         if not ch:
             return
 
-        for check in (self._check_live, self._check_videos):
+        for check in (self._check_live,):
             try:
                 await check(ch)
             except Exception as e:  # jangan sampai satu error mematikan loop
@@ -187,43 +152,3 @@ class TikTokMonitor:
         if live != was_live:
             self.state["is_live"] = live
             _save_state(self.state)
-
-    async def _check_videos(self, ch: discord.TextChannel):
-        videos = await fetch_latest_videos()
-        if not videos:
-            return
-        seen = set(self.state.get("seen_videos", []))
-        if not seen:
-            # Run pertama: tandai semua video lama sebagai sudah dilihat agar tidak spam.
-            self.state["seen_videos"] = [v["id"] for v in videos][:50]
-            _save_state(self.state)
-            return
-
-        new = [v for v in videos if v["id"] not in seen]
-        for v in reversed(new):  # kirim dari yang paling lama
-            embed = discord.Embed(
-                title=f"🎬 Video baru dari @{config.TIKTOK_USERNAME}",
-                description=v["title"][:300] or "Video baru telah diposting!",
-                url=v["url"],
-                color=0x00F2EA,
-            )
-            await ch.send(v["url"], embed=embed)
-            seen.add(v["id"])
-        if new:
-            self.state["seen_videos"] = list(seen)[-100:]
-            _save_state(self.state)
-
-    async def announce_video(self, url: str, note: str = "") -> bool:
-        """Umumkan video secara manual ke channel TikTok (dipakai /tiktok-post)."""
-        guild = self.bot.get_guild(config.GUILD_ID)
-        ch = await self.ensure_channel(guild) if guild else None
-        if not ch:
-            return False
-        embed = discord.Embed(
-            title=f"🎬 Video baru dari @{config.TIKTOK_USERNAME}",
-            description=note[:300] or "Video baru telah diposting!",
-            url=url,
-            color=0x00F2EA,
-        )
-        await ch.send(url, embed=embed)
-        return True

@@ -30,26 +30,17 @@ def main():
     bot_cmd = [sys.executable, "bot.py"]
     bot_proc = subprocess.Popen(bot_cmd, cwd=cwd)
 
-    rsshub_proc = None
-
     def handle_exit(signum, frame):
         print("\n🛑 [SairiHost] Menerima sinyal stop, mematikan semua proses...")
         try:
             bot_proc.terminate()
             api_proc.terminate()
-            if rsshub_proc:
-                rsshub_proc.terminate()
         except:
             pass
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
-
-    # 3. (Opsional) RSSHub lokal untuk feed video TikTok: set RSSHUB_AUTOSTART=1 di .env
-    if os.getenv("RSSHUB_AUTOSTART", "0") == "1":
-        print("📰 [3/3] Menyalakan RSSHub lokal (port 1200)...")
-        rsshub_proc = subprocess.Popen(["bash", "rsshub_run.sh"], cwd=cwd)
 
     # Tunggu proses bot
     try:
@@ -58,8 +49,6 @@ def main():
         handle_exit(None, None)
     finally:
         api_proc.terminate()
-        if rsshub_proc:
-            rsshub_proc.terminate()
 
 if __name__ == "__main__":
     main()

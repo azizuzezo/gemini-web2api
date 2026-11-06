@@ -581,26 +581,6 @@ async def cmd_train(interaction: discord.Interaction, topik: str, informasi: str
         await interaction.response.send_message("❌ Gagal menyimpan pengetahuan baru ke memori.", ephemeral=True)
 
 
-@bot.tree.command(name="tiktok-post", description="Umumkan video TikTok baru ke channel tiktok (Khusus Staff)")
-@app_commands.describe(link="Link video TikTok", catatan="Keterangan singkat (opsional)")
-async def cmd_tiktok_post(interaction: discord.Interaction, link: str, catatan: str = ""):
-    user_roles = [r.id for r in getattr(interaction.user, "roles", [])]
-    is_staff = (
-        interaction.user.guild_permissions.administrator
-        or config.ROLE_FOUNDER in user_roles
-        or config.ROLE_MODERATOR in user_roles
-    )
-    if not is_staff:
-        await interaction.response.send_message("❌ Perintah ini khusus untuk Founder dan Moderator.", ephemeral=True)
-        return
-    if not re.match(r"^https?://(www\.|vm\.|vt\.)?tiktok\.com/", link):
-        await interaction.response.send_message("❌ Link harus berupa URL TikTok.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    ok = await tiktok_monitor.announce_video(link, catatan)
-    await interaction.followup.send("✅ Video diumumkan ke channel TikTok!" if ok else "❌ Gagal mengirim ke channel TikTok.", ephemeral=True)
-
-
 @bot.tree.command(name="help", description="Daftar fitur dan perintah BalikLayar Core Bot")
 async def bot_help(interaction: discord.Interaction):
     embed = discord.Embed(

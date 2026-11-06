@@ -7,15 +7,3 @@ services:
     volumes:
       - ./config.json:/app/config.json
     restart: unless-stopped
-
-  # RSSHub self-host: sumber feed video baru TikTok untuk bot Discord
-  # Feed: http://127.0.0.1:1200/tiktok/user/@alfiqojundullah
-  rsshub:
-    image: diygod/rsshub:latest
-    container_name: rsshub
-    ports:
-      - "1200:1200"
-    environment:
-      NODE_ENV: production
-      CACHE_EXPIRE: "300"
-    restart: unless-stopped

@@ -25,12 +25,6 @@ CHANNEL_LOGS = 1568203782276382770        # ╰・📋・bot-logs
 TIKTOK_USERNAME = os.getenv("TIKTOK_USERNAME", "alfiqojundullah")
 # Kosongkan = bot membuat channel read-only otomatis (ID disimpan di tiktok_state.json)
 CHANNEL_TIKTOK = int(os.getenv("DISCORD_CHANNEL_TIKTOK", 0))
-# RSS feed video akun (opsional). Kosong = notifikasi video otomatis mati, pakai /tiktok-post.
-# Contoh RSSHub: http://<host>:1200/tiktok/user/@alfiqojundullah
-TIKTOK_VIDEO_FEED_URL = os.getenv(
-    "TIKTOK_VIDEO_FEED_URL",
-    f"http://127.0.0.1:1200/tiktok/user/@{TIKTOK_USERNAME}" if os.getenv("RSSHUB_AUTOSTART", "0") == "1" else "",
-)
 TIKTOK_POLL_SECONDS = int(os.getenv("TIKTOK_POLL_SECONDS", 120))
 TIKTOK_PING_EVERYONE = os.getenv("TIKTOK_PING_EVERYONE", "0") == "1"
 
