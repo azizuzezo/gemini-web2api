@@ -167,6 +167,25 @@ SELLING_PATTERNS = [
     r"(?i)\b(\d+k|\d+rb|rp\.?\s*\d+)\b.*\b(akun|tools|pro|gemini|capcut|canva|chatgpt|claude)\b"
 ]
 
+def build_server_context(guild: discord.Guild, member: discord.Member, channel) -> str:
+    if not guild:
+        return ""
+    member_count = getattr(guild, "member_count", len(guild.members))
+    user_roles = [r.name for r in getattr(member, "roles", []) if r.name != "@everyone"]
+    roles_str = ", ".join(user_roles) if user_roles else "Member Baru"
+    channel_name = getattr(channel, "name", "channel umum")
+
+    return (
+        f"- Nama Komunitas: BalikLayar AI (Afiliasi Kreator Video AI & duacincin.id)\n"
+        f"- Total Anggota Saat Ini: {member_count} member aktif\n"
+        f"- Status Bot: Online 24/7 di Cloud Node SairiHost (AMD EPYC, latency normal, operasional penuh)\n"
+        f"- Saluran Tempat Bertanya: #{channel_name}\n"
+        f"- Penanya: {member.display_name} (Role: {roles_str})\n"
+        f"- Founder / Pemilik: Alfiqo (BalikLayar.id / duacincin.id)\n"
+        f"- Fitur Aktif: Auto-Verifikasi Real Human di #verifikasi-kreator & Auto-Kick jualan akun liar\n"
+        f"- Saluran Utama: #welcome, #rules, #pengumuman, #ngobrol-santai, #ide-dan-tren, #tanya-jawab, #pamer-komisi, #showcase-video, #resource-share"
+    )
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
@@ -239,19 +258,21 @@ async def on_message(message: discord.Message):
         clean_text = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
         if not clean_text:
             await message.reply(
-                "Halo! 👋 Ada yang bisa saya bantu seputar konten video AI atau strategi affiliate hari ini?\n"
+                "Halo! 👋 Ada yang bisa saya bantu seputar konten video AI, strategi affiliate, atau cek status server hari ini?\n"
                 "Ketik pertanyaanmu langsung atau gunakan command `/tanya-ai`! 🚀"
             )
             return
 
         async with message.channel.typing():
-            ai_reply = await ai_service.query_ai(clean_text, message.author.display_name)
+            ctx = build_server_context(message.guild, message.author, message.channel)
+            ai_reply = await ai_service.query_ai(clean_text, message.author.display_name, server_context=ctx)
             if len(ai_reply) > 1950:
                 ai_reply = ai_reply[:1940] + "...\n*(terpotong batas Discord)*"
             await message.reply(ai_reply, mention_author=True)
         return
 
     await bot.process_commands(message)
+
 
 
 # ====================================================================
@@ -424,10 +445,12 @@ async def prompt_ide(interaction: discord.Interaction):
 @app_commands.describe(pertanyaan="Topik atau pertanyaan yang ingin kamu tanyakan ke AI")
 async def cmd_tanya_ai(interaction: discord.Interaction, pertanyaan: str):
     await interaction.response.defer(thinking=True)
-    reply = await ai_service.query_ai(pertanyaan, interaction.user.display_name)
+    ctx = build_server_context(interaction.guild, interaction.user, interaction.channel)
+    reply = await ai_service.query_ai(pertanyaan, interaction.user.display_name, server_context=ctx)
     if len(reply) > 1950:
         reply = reply[:1940] + "...\n*(terpotong batas Discord)*"
     await interaction.followup.send(reply)
+
 
 
 @bot.tree.command(name="ide-konten", description="Dapatkan 3 ide video pendek viral + hook pembuka untuk niche kamu")
