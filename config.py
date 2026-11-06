@@ -25,8 +25,8 @@ CHANNEL_LOGS = 1568203782276382770        # ╰・📋・bot-logs
 TIKTOK_USERNAME = os.getenv("TIKTOK_USERNAME", "alfiqojundullah")
 # Kosongkan = bot membuat channel read-only otomatis (ID disimpan di tiktok_state.json)
 CHANNEL_TIKTOK = int(os.getenv("DISCORD_CHANNEL_TIKTOK", 0))
-# RSS feed video akun (mis. RSSHub self-host: https://<host>/tiktok/user/@alfiqojundullah)
-TIKTOK_VIDEO_FEED_URL = os.getenv("TIKTOK_VIDEO_FEED_URL", f"https://rsshub.app/tiktok/user/@{TIKTOK_USERNAME}")
+# RSS feed video akun (RSSHub self-host, lihat docker-compose.local.yml: http://<host>:1200/tiktok/user/@alfiqojundullah)
+TIKTOK_VIDEO_FEED_URL = os.getenv("TIKTOK_VIDEO_FEED_URL", f"http://127.0.0.1:1200/tiktok/user/@{TIKTOK_USERNAME}")
 TIKTOK_POLL_SECONDS = int(os.getenv("TIKTOK_POLL_SECONDS", 120))
 TIKTOK_PING_EVERYONE = os.getenv("TIKTOK_PING_EVERYONE", "0") == "1"
 
