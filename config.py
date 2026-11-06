@@ -23,8 +23,8 @@ CHANNEL_LOGS = 1568203782276382770        # ╰・📋・bot-logs
 # TIKTOK MONITOR (LIVE + VIDEO BARU)
 # ==========================================
 TIKTOK_USERNAME = os.getenv("TIKTOK_USERNAME", "alfiqojundullah")
-# Kosongkan = bot membuat channel read-only otomatis (ID disimpan di tiktok_state.json)
-CHANNEL_TIKTOK = int(os.getenv("DISCORD_CHANNEL_TIKTOK", 0))
+# ID channel notifikasi TikTok (read-only). Set 0 agar bot membuat channel baru otomatis
+CHANNEL_TIKTOK = int(os.getenv("DISCORD_CHANNEL_TIKTOK", 1568308183187853355))  # ┃・🎬・tiktok-alfiqo
 TIKTOK_POLL_SECONDS = int(os.getenv("TIKTOK_POLL_SECONDS", 120))
 TIKTOK_PING_EVERYONE = os.getenv("TIKTOK_PING_EVERYONE", "0") == "1"
 
