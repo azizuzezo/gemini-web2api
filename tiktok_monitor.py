@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 import xml.etree.ElementTree as ET
 
 import discord
@@ -44,10 +45,14 @@ def _save_state(state: dict) -> None:
 
 async def check_live() -> bool | None:
     """True = sedang live, False = tidak live, None = gagal cek."""
-    proc = await asyncio.create_subprocess_exec(
-        "yt-dlp", "--skip-download", "--no-warnings", "-J", LIVE_URL,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "yt_dlp", "--skip-download", "--no-warnings", "-J", LIVE_URL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception as e:
+        print(f"⚠️ Tidak bisa menjalankan yt-dlp (pip install yt-dlp?): {e}")
+        return None
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=60)
     except asyncio.TimeoutError:
@@ -153,8 +158,11 @@ class TikTokMonitor:
         if not ch:
             return
 
-        await self._check_live(ch)
-        await self._check_videos(ch)
+        for check in (self._check_live, self._check_videos):
+            try:
+                await check(ch)
+            except Exception as e:  # jangan sampai satu error mematikan loop
+                print(f"⚠️ TikTok monitor {check.__name__} error: {e}")
 
     async def _check_live(self, ch: discord.TextChannel):
         live = await check_live()
