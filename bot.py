@@ -191,67 +191,66 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    if message.author.guild_permissions.administrator:
-        await bot.process_commands(message)
-        return
-
-    member_roles = [r.id for r in getattr(message.author, "roles", [])]
-    if config.ROLE_FOUNDER in member_roles or config.ROLE_MODERATOR in member_roles:
-        await bot.process_commands(message)
-        return
-
     content = message.content
-    is_violation = any(re.search(p, content) for p in SELLING_PATTERNS)
+    member_roles = [r.id for r in getattr(message.author, "roles", [])]
+    is_staff = (
+        message.author.guild_permissions.administrator
+        or config.ROLE_FOUNDER in member_roles
+        or config.ROLE_MODERATOR in member_roles
+    )
 
-    if is_violation:
-        try:
-            await message.delete()
-        except:
-            pass
+    # 1. AUTO-MOD CHECK: Khusus member biasa (Staff bebas memposting)
+    if not is_staff:
+        is_violation = any(re.search(p, content) for p in SELLING_PATTERNS)
+        if is_violation:
+            try:
+                await message.delete()
+            except:
+                pass
 
-        try:
-            dm_embed = discord.Embed(
-                title="⛔ Kamu Telah Dikeluarkan (KICK) dari BalikLayar AI",
-                description=(
-                    "Kamu dikeluarkan secara otomatis karena melanggar **ATURAN KERAS OWNER**:\n\n"
-                    "❌ **Dilarang memposting atau memperjualbelikan akun & tools apapun tanpa izin Admin.**\n"
-                    "*(Termasuk jualan Gemini Pro, CapCut, Canva, akun premium, atau tools kompetitor BalikLayar AI)*.\n\n"
-                    "Jika ingin berjualan atau bermitra resmi, wajib menghubungi Owner/Admin terlebih dahulu."
-                ),
-                color=0xFF0000
+            try:
+                dm_embed = discord.Embed(
+                    title="⛔ Kamu Telah Dikeluarkan (KICK) dari BalikLayar AI",
+                    description=(
+                        "Kamu dikeluarkan secara otomatis karena melanggar **ATURAN KERAS OWNER**:\n\n"
+                        "❌ **Dilarang memposting atau memperjualbelikan akun & tools apapun tanpa izin Admin.**\n"
+                        "*(Termasuk jualan Gemini Pro, CapCut, Canva, akun premium, atau tools kompetitor BalikLayar AI)*.\n\n"
+                        "Jika ingin berjualan atau bermitra resmi, wajib menghubungi Owner/Admin terlebih dahulu."
+                    ),
+                    color=0xFF0000
+                )
+                await message.author.send(embed=dm_embed)
+            except:
+                pass
+
+            try:
+                await message.author.kick(reason="Auto-Mod Owner: Jualan tools/akun tanpa izin")
+                print(f"🚨 AUTO-KICK: {message.author.name} ({message.author.id})")
+            except Exception as e:
+                print(f"❌ Gagal kick {message.author.name}: {e}")
+
+            warning_msg = (
+                f"⛔ **PERINGATAN KERAS:**\n"
+                f"{message.author.mention} telah **dikeluarkan otomatis (KICK)** oleh sistem!\n"
+                f"**Alasan:** Dilarang keras posting atau jualan akun/tools tanpa izin Admin/Owner. "
+                f"Patuhi aturan di <#{config.CHANNEL_RULES}>!"
             )
-            await message.author.send(embed=dm_embed)
-        except:
-            pass
+            await message.channel.send(warning_msg, delete_after=15)
 
-        try:
-            await message.author.kick(reason="Auto-Mod Owner: Jualan tools/akun tanpa izin")
-            print(f"🚨 AUTO-KICK: {message.author.name} ({message.author.id})")
-        except Exception as e:
-            print(f"❌ Gagal kick {message.author.name}: {e}")
+            logs_ch = bot.get_channel(config.CHANNEL_LOGS)
+            if logs_ch:
+                log_embed = discord.Embed(
+                    title="🚨 [AUTO-KICK] Pelanggaran Jualan Liar Terdeteksi",
+                    color=0xFF0000,
+                    timestamp=datetime.datetime.now(datetime.timezone.utc)
+                )
+                log_embed.add_field(name="👤 Pelanggar", value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
+                log_embed.add_field(name="📍 Channel", value=message.channel.mention, inline=True)
+                log_embed.add_field(name="📝 Isi Pesan", value=f"```{content[:1000]}```", inline=False)
+                log_embed.add_field(name="⚡ Tindakan", value="Pesan Dihapus + User Di-KICK Otomatis", inline=False)
+                await logs_ch.send(embed=log_embed)
 
-        warning_msg = (
-            f"⛔ **PERINGATAN KERAS:**\n"
-            f"{message.author.mention} telah **dikeluarkan otomatis (KICK)** oleh sistem!\n"
-            f"**Alasan:** Dilarang keras posting atau jualan akun/tools tanpa izin Admin/Owner. "
-            f"Patuhi aturan di <#{config.CHANNEL_RULES}>!"
-        )
-        await message.channel.send(warning_msg, delete_after=15)
-
-        logs_ch = bot.get_channel(config.CHANNEL_LOGS)
-        if logs_ch:
-            log_embed = discord.Embed(
-                title="🚨 [AUTO-KICK] Pelanggaran Jualan Liar Terdeteksi",
-                color=0xFF0000,
-                timestamp=datetime.datetime.now(datetime.timezone.utc)
-            )
-            log_embed.add_field(name="👤 Pelanggar", value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
-            log_embed.add_field(name="📍 Channel", value=message.channel.mention, inline=True)
-            log_embed.add_field(name="📝 Isi Pesan", value=f"```{content[:1000]}```", inline=False)
-            log_embed.add_field(name="⚡ Tindakan", value="Pesan Dihapus + User Di-KICK Otomatis", inline=False)
-            await logs_ch.send(embed=log_embed)
-
-        return
+            return
 
     # Trigger AI Mention: Jika member mention bot (@BalikLayar Bot)
     if bot.user in message.mentions and not message.mention_everyone:
@@ -263,9 +262,40 @@ async def on_message(message: discord.Message):
             )
             return
 
+        # Cek jika Founder / Moderator melatih bot lewat mention
+        user_roles = [r.id for r in getattr(message.author, "roles", [])]
+        is_staff = config.ROLE_FOUNDER in user_roles or config.ROLE_MODERATOR in user_roles or message.author.guild_permissions.administrator
+        train_match = re.search(r"(?i)\b(tolong\s+)?(ingat|catat|pelajari)\s*(ini)?\s*:\s*(.*)", clean_text)
+        if is_staff and train_match:
+            learned_info = train_match.group(4).strip()
+            if learned_info:
+                success = ai_service.add_training_memory("Instruksi Chat Langsung", learned_info, message.author.display_name)
+                if success:
+                    embed = discord.Embed(
+                        title="🧠 Ingatan Baru Berhasil Disimpan Permanen!",
+                        description=(
+                            f"Siap {message.author.mention}! Saya sudah mencatat dan mengingat informasi ini ke memori permanen:\n\n"
+                            f"> *\"{learned_info}\"*\n\n"
+                            f"✅ *Mulai sekarang, saya akan selalu menggunakan informasi ini setiap kali ada member yang bertanya seputar topik tersebut.*"
+                        ),
+                        color=0x2ECC71
+                    )
+                    await message.reply(embed=embed)
+                    return
+
         async with message.channel.typing():
             ctx = build_server_context(message.guild, message.author, message.channel)
-            ai_reply = await ai_service.query_ai(clean_text, message.author.display_name, server_context=ctx)
+
+            # Ambil 3 riwayat chat terakhir untuk ingatan percakapan nyambung
+            chat_history = ""
+            try:
+                hist_msgs = [m async for m in message.channel.history(limit=4, before=message)]
+                if hist_msgs:
+                    chat_history = "\n".join([f"{m.author.display_name}: {m.content[:200]}" for m in reversed(hist_msgs) if m.content])
+            except Exception:
+                pass
+
+            ai_reply = await ai_service.query_ai(clean_text, message.author.display_name, server_context=ctx, chat_history=chat_history)
             if len(ai_reply) > 1950:
                 ai_reply = ai_reply[:1940] + "...\n*(terpotong batas Discord)*"
             await message.reply(ai_reply, mention_author=True)
@@ -397,7 +427,7 @@ async def server_stats(interaction: discord.Interaction):
 
     text_channels = len([c for c in guild.channels if isinstance(c, discord.TextChannel)])
     voice_channels = len([c for c in guild.channels if isinstance(c, discord.VoiceChannel)])
-    
+
     embed.add_field(name="👑 Founder", value=f"<@{guild.owner_id}>", inline=True)
     embed.add_field(name="👥 Total Member", value=str(guild.member_count), inline=True)
     embed.add_field(name="🎭 Total Role", value=str(len(guild.roles)), inline=True)
@@ -483,6 +513,39 @@ async def cmd_bedah_hook(interaction: discord.Interaction, hook: str):
     if len(reply) > 1950:
         reply = reply[:1940] + "...\n*(terpotong batas Discord)*"
     await interaction.followup.send(reply)
+
+
+@bot.tree.command(name="train", description="Ajarkan pengetahuan/fakta baru ke memori permanen AI BalikLayar (Khusus Staff)")
+@app_commands.describe(
+    topik="Topik atau judul materi (misal: Jadwal Kelas, Promo Diskon, Link Pendaftaran)",
+    informasi="Detail fakta/informasi lengkap yang harus selalu diingat oleh AI"
+)
+async def cmd_train(interaction: discord.Interaction, topik: str, informasi: str):
+    user_roles = [r.id for r in getattr(interaction.user, "roles", [])]
+    is_staff = (
+        interaction.user.guild_permissions.administrator
+        or config.ROLE_FOUNDER in user_roles
+        or config.ROLE_MODERATOR in user_roles
+    )
+    if not is_staff:
+        await interaction.response.send_message("❌ Perintah ini khusus untuk Founder dan Moderator.", ephemeral=True)
+        return
+
+    success = ai_service.add_training_memory(topik, informasi, interaction.user.display_name)
+    if success:
+        embed = discord.Embed(
+            title="🧠 Pengetahuan Baru Berhasil Disimpan Permanen!",
+            description=(
+                f"**Topik:** `{topik}`\n"
+                f"**Informasi:**\n> {informasi}\n\n"
+                f"✅ **Tersimpan ke Knowledge Base permanen (`knowledge.md`)!**\n"
+                f"Mulai sekarang, bot akan selalu menggunakan informasi ini setiap kali ada pertanyaan terkait."
+            ),
+            color=0x2ECC71
+        )
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message("❌ Gagal menyimpan pengetahuan baru ke memori.", ephemeral=True)
 
 
 @bot.tree.command(name="help", description="Daftar fitur dan perintah BalikLayar Core Bot")
