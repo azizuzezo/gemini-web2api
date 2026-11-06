@@ -176,13 +176,15 @@ def build_server_context(guild: discord.Guild, member: discord.Member, channel) 
     channel_name = getattr(channel, "name", "channel umum")
 
     return (
-        f"- Nama Komunitas: BalikLayar AI (Afiliasi Kreator Video AI & duacincin.id)\n"
-        f"- Total Anggota Saat Ini: {member_count} member aktif\n"
-        f"- Status Bot: Online 24/7 di Cloud Node SairiHost (AMD EPYC, latency normal, operasional penuh)\n"
-        f"- Saluran Tempat Bertanya: #{channel_name}\n"
-        f"- Penanya: {member.display_name} (Mention Penanya: <@{member.id}>, Role: {roles_str})\n"
-        f"- Founder / Pemilik: Alfiqo (Mention Founder: <@799987598726135818>)\n"
-        f"- Fitur Aktif: Auto-Verifikasi Real Human di #verifikasi-kreator & Auto-Kick jualan akun liar\n"
+        f"- Nama Komunitas: BalikLayar AI (duacincin.id)\n"
+        f"- Total Anggota: {member_count} member aktif\n"
+        f"- Status Bot & Node: Online 24/7 di Cloud SairiHost (AMD EPYC, port 2014, operasional normal)\n"
+        f"- Saluran Aktif: #{channel_name}\n"
+        f"- Data Penanya: Tag Mention=<@{member.id}> (Nama: {member.display_name}, Role: {roles_str})\n"
+        f"- Data Founder: Tag Mention=<@799987598726135818> (Nama: Alfiqo)\n"
+        f"- Data Moderator: Tag Mention=<@&1568185534352859207>\n"
+        f"- Data Kreator: Tag Mention=<@&1568187130419613776>\n"
+        f"- Fitur Aktif: Auto-Verifikasi Kreator & Auto-Kick jualan liar\n"
         f"- Saluran Utama: #welcome, #rules, #pengumuman, #ngobrol-santai, #ide-dan-tren, #tanya-jawab, #pamer-komisi, #showcase-video, #resource-share"
     )
 

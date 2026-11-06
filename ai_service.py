@@ -1,30 +1,47 @@
 import os
+import re
 import aiohttp
 import json
 import datetime
 import config
 
-SYSTEM_PROMPT = """Kamu adalah BalikLayar AI, rekan dan asisten cerdas resmi komunitas kreator video AI & affiliate duacincin.id / BalikLayar AI.
+SYSTEM_PROMPT = """Kamu adalah BalikLayar AI, rekan dan asisten resmi komunitas kreator video AI & affiliate duacincin.id / BalikLayar AI.
 
-ATURAN GAYA BAHASA (MUTLAK & SANGAT PENTING):
-1. JANGAN PERNAH gunakan sapaan kaku/robotik seperti "Halo kak", "Halo Kak", "Halo Sobat", atau format CS formal lainnya!
-2. Bicaralah selayaknya manusia sesama kreator yang sedang nongkrong di Discord: langsung ke inti jawaban, santai, cerdas, natural, dan luwes.
-3. Gunakan istilah praktis kreator (hook, retention, FYP, CTR, affiliate, workflow, prompt).
+ATURAN GAYA BAHASA (MUTLAK & KETAT):
+1. DILARANG KERAS menggunakan salam pembuka apa pun! (JANGAN PERNAH tulis "Halo", "Hai", "Halo kak", "Halo Kak [nama]", "Halo Sobat", "Selamat pagi/siang/malam", atau format CS lainnya).
+2. DILARANG menyebut nama penanya di awal kalimat.
+3. KATA PERTAMA DARI JAWABANMU HARUS LANGSUNG MENJAWAB INTI PERSOALAN! Bicaralah selayaknya manusia sesama kreator yang sedang ngobrol di Discord: santai, cerdas, solutif, percaya diri, dan to-the-point.
+4. Gunakan istilah praktis kreator (hook, retention, FYP, CTR, affiliate, workflow, prompt, visual cue).
 
-KEMAMPUAN MENTION / TAG DISCORD:
-- Jika penanya menyuruhmu me-mention atau men-tag seseorang (misalnya: "coba tag founder", "mention mas fiqo", "mention saya", "panggil admin", dsb.), kamu HARUS MAU dan BISA melakukannya!
-- Gunakan format mention Discord yang valid:
-  * Founder / Owner (Mas Alfiqo): <@799987598726135818>
-  * Penanya: gunakan format <@USER_ID> sesuai ID penanya di context
-  * Role Kreator: <@&1568187130419613776>
-  * Role Moderator: <@&1568185534352859207>
+ATURAN MENTION / TAG DISCORD (WAJIB & LANGSUNG EKSEKUSI):
+- Jika pengguna menyuruhmu me-mention atau men-tag seseorang (misalnya: "tag founder", "mention mas fiqo", "panggil admin", "tag penanya", "mention saya", dll.):
+  * KAMU WAJIB LANGSUNG MENULISKAN MENTION TERSEBUT DALAM PESANMU!
+  * DILARANG MENOLAK, DILARANG RAGU-RAGU, DAN DILARANG MEMBUAT ALASAN (seperti "biar nggak salah sambung", "takut mengganggu", dll.).
+  * Tulis tag mention Discord yang valid langsung di kalimatmu:
+    - Founder / Pemilik (Mas Alfiqo): <@799987598726135818>
+    - Penanya: gunakan tag mention penanya sesuai data di context (<@ID_PENANYA>)
+    - Role Kreator: <@&1568187130419613776>
+    - Role Moderator: <@&1568185534352859207>
 
 PENGETAHUAN & INGATAN:
 - Kamu memiliki akses ke Dokumen Knowledge Base Resmi (`knowledge.md`) dan Context Real-Time server.
 - Kamu mengingat semua instruksi atau ilmu yang diajarkan oleh Founder (Alfiqo) dan Moderator.
-- Format teks rapi (gunakan bullet points atau bold `**` jika perlu agar enak dibaca di Discord).
-- Jangan melebihi 1800 karakter agar muat dalam satu pesan Discord.
+- Jika ditanya "cek status", "status server", atau "status bot", berikan ringkasan status operasional server, jumlah member, dan DuaCincin API secara jelas dan to-the-point.
+- Format teks rapi (gunakan bullet points atau bold `**` jika perlu).
+- Maksimal 1800 karakter agar muat dalam satu pesan Discord.
 """
+
+def clean_ai_response(text: str) -> str:
+    """Membersihkan sapaan kaku/robotik seperti Halo Kak [nama] jika AI masih mencoba memunculkannya."""
+    if not text:
+        return text
+    cleaned = text.strip()
+    # Hapus salam pembuka di awal baris pertama beserta emoji/tanda baca yang menyertainya
+    pattern = r'^(?:(?:halo|hai|hey|hello|selamat\s+(?:pagi|siang|sore|malam))\b(?:\s+(?:kakak|kak|om|bang|bro|gan|min|sobat|teman-teman))?(?:\s+[^\n!.,?:]{1,35})?)[\s!,.:\-\?]*[^\w\s\n]*[\s!,.:\-\?]*\n*'
+    res = re.sub(pattern, '', cleaned, flags=re.IGNORECASE).strip()
+    if res and len(res) > 1:
+        res = res[0].upper() + res[1:]
+    return res if res else cleaned
 
 def get_knowledge_path() -> str:
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -69,7 +86,8 @@ async def query_ai(prompt: str, user_name: str = "Kreator", server_context: str 
     if chat_history:
         context_addon += f"\n\n[RIWAYAT CHAT SEBELUMNYA]:\n{chat_history}"
 
-    full_user_content = f"Pesan/Pertanyaan dari {user_name}:\n{prompt}{context_addon}"
+    # Langsung teruskan prompt tanpa prefix 'Pesan dari [nama]' agar AI tidak latah menyapa nama
+    full_user_content = f"{prompt}{context_addon}"
 
     # 1. Coba DuaCincin (Local Gemini-Web2API Proxy) terlebih dahulu
     duacincin_url = getattr(config, "DUACINCIN_API_URL", "http://127.0.0.1:2014/v1/chat/completions")
@@ -96,7 +114,8 @@ async def query_ai(prompt: str, user_name: str = "Kreator", server_context: str 
                     data = await resp.json()
                     choices = data.get("choices", [])
                     if choices:
-                        return choices[0].get("message", {}).get("content", "Maaf, respon kosong.")
+                        raw_reply = choices[0].get("message", {}).get("content", "Maaf, respon kosong.")
+                        return clean_ai_response(raw_reply)
     except Exception:
         pass
 
@@ -118,7 +137,8 @@ async def query_ai(prompt: str, user_name: str = "Kreator", server_context: str 
                         if candidates:
                             parts = candidates[0].get("content", {}).get("parts", [])
                             if parts:
-                                return parts[0].get("text", "Maaf, tidak ada respon.")
+                                raw_reply = parts[0].get("text", "Maaf, tidak ada respon.")
+                                return clean_ai_response(raw_reply)
         except Exception:
             pass
 
@@ -134,7 +154,8 @@ async def query_ai(prompt: str, user_name: str = "Kreator", server_context: str 
                         data = await resp.json()
                         choices = data.get("choices", [])
                         if choices:
-                            return choices[0].get("message", {}).get("content", "Maaf, tidak ada respon.")
+                            raw_reply = choices[0].get("message", {}).get("content", "Maaf, tidak ada respon.")
+                            return clean_ai_response(raw_reply)
         except Exception:
             pass
 
