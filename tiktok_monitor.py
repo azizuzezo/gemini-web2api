@@ -1,7 +1,10 @@
 """
 Pemantau TikTok untuk BalikLayar AI.
 
-- Deteksi LIVE akun TikTok (via yt-dlp) -> kirim notifikasi ke channel read-only.
+- Deteksi LIVE akun TikTok (HTTP biasa, tanpa yt-dlp) -> kirim notifikasi ke channel read-only.
+  Cara cek sama dengan tiktok-live-connector (dipakai Patungan Yuk!):
+  1) scrape SIGI_STATE di halaman /@user/live, 2) fallback ke api-live/user/room.
+  liveRoom.status != 4 berarti sedang live.
 - Channel read-only dibuat otomatis oleh bot (member hanya bisa membaca).
 
 Konfigurasi lewat environment variable (lihat config.py):
@@ -11,7 +14,9 @@ Konfigurasi lewat environment variable (lihat config.py):
 import asyncio
 import json
 import os
-import sys
+import re
+
+import aiohttp
 
 import discord
 from discord.ext import tasks
@@ -39,26 +44,49 @@ def _save_state(state: dict) -> None:
         print(f"❌ Gagal menyimpan tiktok_state.json: {e}")
 
 
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.tiktok.com/",
+}
+_SIGI_RE = re.compile(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', re.S)
+_STATUS_OFFLINE = 4  # liveRoom.status: 2 = live, 4 = offline (sama seperti tiktok-live-connector)
+
+
+async def _status_from_html(session: aiohttp.ClientSession) -> int | None:
+    async with session.get(LIVE_URL) as r:
+        html = await r.text()
+    m = _SIGI_RE.search(html)
+    if not m:
+        raise ValueError(f"SIGI_STATE tidak ada (HTTP {r.status}, mungkin diblok/captcha)")
+    info = (json.loads(m.group(1)).get("LiveRoom") or {}).get("liveRoomUserInfo") or {}
+    return (info.get("liveRoom") or {}).get("status")
+
+
+async def _status_from_api(session: aiohttp.ClientSession) -> int | None:
+    params = {"aid": "1988", "sourceType": "54", "uniqueId": config.TIKTOK_USERNAME}
+    async with session.get("https://www.tiktok.com/api-live/user/room/", params=params) as r:
+        data = await r.json(content_type=None)
+    if data.get("statusCode"):
+        raise ValueError(f"API error {data.get('statusCode')} {data.get('message', '')}")
+    return ((data.get("data") or {}).get("liveRoom") or {}).get("status")
+
+
 async def check_live() -> bool | None:
     """True = sedang live, False = tidak live, None = gagal cek."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "yt_dlp", "--skip-download", "--no-warnings", "-J", LIVE_URL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-    except Exception as e:
-        print(f"⚠️ Tidak bisa menjalankan yt-dlp (pip install yt-dlp?): {e}")
-        return None
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except asyncio.TimeoutError:
-        proc.kill()
-        return None
-    if proc.returncode == 0 and out:
-        return True
-    if b"not currently live" in err:
-        return False
-    print(f"⚠️ TikTok live check gagal: {err.decode(errors='ignore')[:200]}")
+    errors = []
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(headers=_HEADERS, timeout=timeout) as session:
+        for source in (_status_from_html, _status_from_api):
+            try:
+                status = await source(session)
+                if status is not None:
+                    return status != _STATUS_OFFLINE
+                errors.append(f"{source.__name__}: status kosong")
+            except Exception as e:
+                errors.append(f"{source.__name__}: {e}")
+    print(f"⚠️ TikTok live check gagal: {' | '.join(errors)[:300]}")
     return None
 
 
@@ -138,7 +166,14 @@ class TikTokMonitor:
     async def _check_live(self, ch: discord.TextChannel):
         live = await check_live()
         if live is None:
+            # Kalau cek gagal terus (~30 menit), anggap tidak live agar live berikutnya tetap dinotif
+            # (mencegah is_live nyangkut True selamanya).
+            self.fail_count = getattr(self, "fail_count", 0) + 1
+            if self.fail_count * config.TIKTOK_POLL_SECONDS >= 1800 and self.state.get("is_live"):
+                self.state["is_live"] = False
+                _save_state(self.state)
             return
+        self.fail_count = 0
         was_live = self.state.get("is_live", False)
         if live and not was_live:
             embed = discord.Embed(
