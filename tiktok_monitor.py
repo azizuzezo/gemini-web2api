@@ -5,20 +5,16 @@ Untuk setiap akun di config.TIKTOK_USERNAMES:
 - LIVE: cara cek sama dengan tiktok-live-connector (dipakai Patungan Yuk!):
   1) scrape SIGI_STATE di halaman /@user/live, 2) fallback ke api-live/user/room.
   liveRoom.status != 4 berarti sedang live.
-- VIDEO BARU: daftar video diambil dari API publik tikwm.com (/api/user/posts),
-  karena halaman profil TikTok diblok anti-bot dari IP server. Maks 1 request/detik.
 - Semua notif dikirim ke satu channel read-only (dibuat otomatis kalau belum ada).
 - Status cek (berhasil/gagal) dilaporkan ke #bot-logs setiap kali berubah.
 
 Konfigurasi lewat environment variable (lihat config.py):
-  TIKTOK_USERNAMES, TIKTOK_POLL_SECONDS, TIKTOK_VIDEO_POLL_SECONDS, TIKTOK_PING_EVERYONE
+  TIKTOK_USERNAMES, TIKTOK_POLL_SECONDS, TIKTOK_PING_EVERYONE
 """
 
-import asyncio
 import json
 import os
 import re
-import time
 
 import aiohttp
 
@@ -37,9 +33,6 @@ _HEADERS = {
 }
 _SIGI_RE = re.compile(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', re.S)
 _STATUS_OFFLINE = 4  # liveRoom.status: 2 = live, 4 = offline (sama seperti tiktok-live-connector)
-TIKWM_POSTS_URL = "https://www.tikwm.com/api/user/posts"
-_TIKWM_MIN_INTERVAL = 1.2  # API gratis tikwm: maksimal 1 request/detik
-_MAX_VIDEO_AGE = 2 * 24 * 3600  # video lebih tua dari ini tidak dinotif (mis. hasil sinkron ulang)
 TIKTOK_PINK = 0xFE2C55
 
 NOTIF_VERSION = 3  # naikkan kalau tampilan notif live diubah -> live yang sedang jalan dikirim ulang sekali
@@ -55,10 +48,6 @@ def live_url(username: str) -> str:
     return f"{profile_url(username)}/live"
 
 
-def video_url(username: str, video_id: str | int) -> str:
-    return f"{profile_url(username)}/video/{video_id}"
-
-
 # ------------------------------------------------------------------ state
 
 def _load_state() -> dict:
@@ -71,6 +60,9 @@ def _load_state() -> dict:
     if "accounts" not in state:
         legacy = {k: state.pop(k) for k in ("is_live", "notif_version", "last_message_id") if k in state}
         state["accounts"] = {config.TIKTOK_USERNAMES[0]: legacy} if legacy else {}
+    for acc in state["accounts"].values():  # sisa fitur video baru (sudah dihapus)
+        for k in ("last_video_id", "video_count"):
+            acc.pop(k, None)
     return state
 
 
@@ -174,95 +166,6 @@ def build_live_message(username: str, info: dict) -> tuple[str, discord.Embed, d
     return content, embed, view
 
 
-# ------------------------------------------------------------------ video baru (via tikwm.com)
-# Halaman profil & daftar video TikTok diblok anti-bot dari IP server, jadi daftar video
-# diambil lewat API publik tikwm.com (pihak ketiga, tidak resmi, gratis 1 request/detik).
-
-def _video_time(video_id: int) -> int:
-    """ID video TikTok berbasis waktu: 32 bit teratas = unix timestamp upload."""
-    return int(video_id) >> 32
-
-
-_tikwm_last_call = 0.0
-
-
-async def fetch_latest_videos(session: aiohttp.ClientSession, username: str) -> list[dict]:
-    """Video terbaru dulu: [{id, title, cover, create_time, nickname, avatar}]. Raise kalau gagal."""
-    global _tikwm_last_call
-    wait = _TIKWM_MIN_INTERVAL - (time.monotonic() - _tikwm_last_call)
-    if wait > 0:
-        await asyncio.sleep(wait)
-    _tikwm_last_call = time.monotonic()
-
-    params = {"unique_id": username, "count": "10", "cursor": "0"}
-    async with session.get(TIKWM_POSTS_URL, params=params) as r:
-        status = r.status
-        try:
-            data = await r.json(content_type=None)
-        except Exception:
-            raise ValueError(f"tikwm HTTP {status}, bukan JSON")
-    if not isinstance(data, dict) or data.get("code") != 0:
-        msg = data.get("msg") if isinstance(data, dict) else ""
-        raise ValueError(f"tikwm HTTP {status}: {msg or 'respons tidak dikenal'}")
-
-    now = time.time()
-    videos = []
-    for v in (data.get("data") or {}).get("videos") or []:
-        vid = str(v.get("video_id") or v.get("aweme_id") or "")
-        if not vid.isdigit() or not (1451606400 <= _video_time(int(vid)) <= now + 86400):
-            continue
-        author = v.get("author") or {}
-        videos.append({
-            "id": int(vid),
-            "title": (v.get("title") or "").strip(),
-            "cover": v.get("origin_cover") or v.get("cover") or v.get("ai_dynamic_cover"),
-            "create_time": int(v.get("create_time") or _video_time(int(vid))),
-            "nickname": author.get("nickname"),
-            "avatar": author.get("avatar"),
-        })
-    if not videos:
-        raise ValueError(f"tikwm tidak mengembalikan video untuk @{username}")
-    return sorted(videos, key=lambda x: x["id"], reverse=True)
-
-
-def build_video_message(username: str, video: dict) -> tuple[str, discord.Embed, discord.ui.View]:
-    nickname = video.get("nickname") or username
-    avatar = video.get("avatar")
-    url = video_url(username, video["id"])
-    caption = video.get("title") or ""
-    if len(caption) > 300:
-        caption = caption[:297] + "..."
-
-    content = (
-        f"🎬 **{nickname} baru upload video baru!**\n"
-        f"Langsung tonton, kasih like & komen biar makin FYP 🔥"
-    )
-    embed = discord.Embed(
-        title="📲 Video baru di TikTok",
-        url=url,
-        description=(
-            (f"> {caption}\n\n" if caption else "")
-            + f"**[👉 Tonton videonya di sini]({url})**"
-        ),
-        color=TIKTOK_PINK,
-        timestamp=discord.utils.utcnow(),
-    )
-    embed.set_author(name=f"{nickname} (@{username})", url=profile_url(username), icon_url=avatar or None)
-    if avatar:
-        embed.set_thumbnail(url=avatar)
-    if video.get("cover"):
-        embed.set_image(url=video["cover"])
-    embed.add_field(name="🕒 Diupload", value=f"<t:{video['create_time']}:R>", inline=True)
-    embed.set_footer(text="BalikLayar AI • notifikasi video baru otomatis")
-
-    view = discord.ui.View(timeout=None)
-    view.add_item(discord.ui.Button(label="Tonton video", emoji="▶️", url=url))
-    view.add_item(discord.ui.Button(label="Follow TikTok", emoji="➕", url=profile_url(username)))
-    if config.TIKTOK_PING_EVERYONE:
-        content = "@everyone " + content
-    return content, embed, view
-
-
 # ------------------------------------------------------------------ monitor
 
 class TikTokMonitor:
@@ -271,7 +174,6 @@ class TikTokMonitor:
         self.state = _load_state()
         self.outcomes: dict[str, str] = {}   # "user:kind" -> "ok"/"fail" (untuk laporan #bot-logs)
         self.fail_counts: dict[str, int] = {}
-        self.last_video_check = 0.0
         self.loop_task = tasks.loop(seconds=config.TIKTOK_POLL_SECONDS)(self._tick)
         self.loop_task.before_loop(self._before)
 
@@ -321,7 +223,7 @@ class TikTokMonitor:
                 "┃・🎬・tiktok-live",
                 overwrites=overwrites,
                 category=category,
-                topic=f"Notifikasi otomatis LIVE & video baru TikTok {accounts} (read-only)",
+                topic=f"Notifikasi otomatis LIVE TikTok {accounts} (read-only)",
                 reason="Channel read-only notifikasi TikTok",
             )
         except Exception as e:
@@ -340,19 +242,13 @@ class TikTokMonitor:
         if not ch:
             return
 
-        do_videos = time.monotonic() - self.last_video_check >= config.TIKTOK_VIDEO_POLL_SECONDS
-        if do_videos:
-            self.last_video_check = time.monotonic()
-
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession(headers=_HEADERS, timeout=timeout) as session:
             for username in config.TIKTOK_USERNAMES:
-                checks = [self._check_live] + ([self._check_video] if do_videos else [])
-                for check in checks:
-                    try:
-                        await check(session, ch, username)
-                    except Exception as e:  # jangan sampai satu error mematikan loop
-                        print(f"⚠️ TikTok monitor {check.__name__} @{username} error: {e}", flush=True)
+                try:
+                    await self._check_live(session, ch, username)
+                except Exception as e:  # jangan sampai satu error mematikan loop
+                    print(f"⚠️ TikTok monitor live @{username} error: {e}", flush=True)
 
     async def _report(self, username: str, kind: str, ok: bool, detail: str):
         """Kirim status cek ke #bot-logs saat pertama kali jalan & tiap kali hasilnya berubah (ok <-> gagal)."""
@@ -361,7 +257,7 @@ class TikTokMonitor:
         if self.outcomes.get(key) == outcome:
             return
         self.outcomes[key] = outcome
-        label = "live" if kind == "live" else "video baru"
+        label = kind
         if ok:
             msg = f"✅ TikTok cek {label} @{username} jalan: {detail}"
         else:
@@ -425,29 +321,3 @@ class TikTokMonitor:
                     break
         except Exception as e:
             print(f"⚠️ Gagal hapus notif lama: {e}", flush=True)
-
-    # ---------------- video baru
-
-    async def _check_video(self, session: aiohttp.ClientSession, ch: discord.TextChannel, username: str):
-        acc = self._acc(username)
-        try:
-            videos = await fetch_latest_videos(session, username)
-        except Exception as e:
-            await self._report(username, "video", False, str(e)[:300])
-            return
-        newest = videos[0]["id"]
-        await self._report(username, "video", True, f"video terbaru {newest} (tikwm)")
-
-        last = acc.get("last_video_id")
-        if last is None:
-            # Pertama kali: catat saja, jangan spam video lama
-            acc["last_video_id"] = newest
-        else:
-            fresh = sorted((v for v in videos if v["id"] > last), key=lambda v: v["id"])[-3:]  # maks 3, terlama dulu
-            for v in fresh:
-                if time.time() - v["create_time"] > _MAX_VIDEO_AGE:
-                    continue
-                await self._send(ch, *build_video_message(username, v))
-            acc["last_video_id"] = max(last, newest)
-        acc.pop("video_count", None)
-        _save_state(self.state)
