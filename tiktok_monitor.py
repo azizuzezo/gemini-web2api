@@ -199,9 +199,16 @@ async def fetch_profile(session: aiohttp.ClientSession, username: str) -> dict:
     async with session.get(profile_url(username)) as r:
         html = await r.text()
         status = r.status
-    m = re.search(r'"videoCount"\s*:\s*(\d+)', html)
+    m = re.search(r'"videoCount"\s*:\s*"?(\d+)', html)
     if not m:
-        raise ValueError(f"videoCount tidak ada di profil (HTTP {status}, mungkin diblok)")
+        # Ambil statusCode TikTok dari data halaman supaya alasan gagalnya jelas
+        # (10202 = akun tidak ada, 10221/10222 = akun diblokir/privat, dll.)
+        code = re.search(r'"webapp\.user-detail"\s*:\s*\{[^{}]*?"statusCode"\s*:\s*(-?\d+)', html)
+        if not code:
+            code = re.search(r'"statusCode"\s*:\s*(-?\d+)', html)
+        hint = f", statusCode TikTok {code.group(1)}" if code else ""
+        captcha = ", halaman captcha" if "captcha" in html.lower()[:20000] else ""
+        raise ValueError(f"videoCount tidak ada di profil (HTTP {status}{hint}{captcha}, {len(html)} byte)")
     nick = re.search(r'"nickname"\s*:\s*"([^"]{1,80})"', html)
     avatar = re.search(r'"avatarLarger"\s*:\s*"([^"]+)"', html)
 
