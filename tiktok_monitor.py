@@ -5,9 +5,8 @@ Untuk setiap akun di config.TIKTOK_USERNAMES:
 - LIVE: cara cek sama dengan tiktok-live-connector (dipakai Patungan Yuk!):
   1) scrape SIGI_STATE di halaman /@user/live, 2) fallback ke api-live/user/room.
   liveRoom.status != 4 berarti sedang live.
-- VIDEO BARU: ID video terbaru diambil dari halaman embed kreator (/embed/@user),
-  judul & thumbnail dari oEmbed resmi TikTok. Kalau embed diblok, fallback ke
-  "videoCount" di halaman profil (notif tanpa link video spesifik).
+- VIDEO BARU: daftar video diambil dari API publik tikwm.com (/api/user/posts),
+  karena halaman profil TikTok diblok anti-bot dari IP server. Maks 1 request/detik.
 - Semua notif dikirim ke satu channel read-only (dibuat otomatis kalau belum ada).
 - Status cek (berhasil/gagal) dilaporkan ke #bot-logs setiap kali berubah.
 
@@ -15,17 +14,13 @@ Konfigurasi lewat environment variable (lihat config.py):
   TIKTOK_USERNAMES, TIKTOK_POLL_SECONDS, TIKTOK_VIDEO_POLL_SECONDS, TIKTOK_PING_EVERYONE
 """
 
+import asyncio
 import json
 import os
 import re
 import time
 
 import aiohttp
-
-try:  # Meniru TLS/HTTP2 Chrome supaya halaman profil TikTok tidak diganti halaman anti-bot
-    from curl_cffi.requests import AsyncSession as _CurlSession
-except Exception:  # curl_cffi belum terpasang -> cek video pakai aiohttp (kemungkinan diblok)
-    _CurlSession = None
 
 import discord
 from discord.ext import tasks
@@ -42,7 +37,8 @@ _HEADERS = {
 }
 _SIGI_RE = re.compile(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', re.S)
 _STATUS_OFFLINE = 4  # liveRoom.status: 2 = live, 4 = offline (sama seperti tiktok-live-connector)
-_VIDEO_ID_RE = re.compile(r'/video/(\d{15,21})|"(?:id|videoId|itemId)"\s*:\s*"(\d{15,21})"')
+TIKWM_POSTS_URL = "https://www.tikwm.com/api/user/posts"
+_TIKWM_MIN_INTERVAL = 1.2  # API gratis tikwm: maksimal 1 request/detik
 _MAX_VIDEO_AGE = 2 * 24 * 3600  # video lebih tua dari ini tidak dinotif (mis. hasil sinkron ulang)
 TIKTOK_PINK = 0xFE2C55
 
@@ -178,127 +174,62 @@ def build_live_message(username: str, info: dict) -> tuple[str, discord.Embed, d
     return content, embed, view
 
 
-# ------------------------------------------------------------------ video baru
+# ------------------------------------------------------------------ video baru (via tikwm.com)
+# Halaman profil & daftar video TikTok diblok anti-bot dari IP server, jadi daftar video
+# diambil lewat API publik tikwm.com (pihak ketiga, tidak resmi, gratis 1 request/detik).
 
 def _video_time(video_id: int) -> int:
     """ID video TikTok berbasis waktu: 32 bit teratas = unix timestamp upload."""
     return int(video_id) >> 32
 
 
-def _snip(html: str, n: int = 160) -> str:
-    """Potongan awal halaman (untuk diagnosa di #bot-logs)."""
-    return re.sub(r"\s+", " ", html[:n]).replace("`", "'")
+_tikwm_last_call = 0.0
 
 
-class VideoHttp:
-    """GET untuk cek video baru: curl_cffi (meniru Chrome) kalau terpasang, kalau tidak aiohttp."""
+async def fetch_latest_videos(session: aiohttp.ClientSession, username: str) -> list[dict]:
+    """Video terbaru dulu: [{id, title, cover, create_time, nickname, avatar}]. Raise kalau gagal."""
+    global _tikwm_last_call
+    wait = _TIKWM_MIN_INTERVAL - (time.monotonic() - _tikwm_last_call)
+    if wait > 0:
+        await asyncio.sleep(wait)
+    _tikwm_last_call = time.monotonic()
 
-    def __init__(self, aio_session: aiohttp.ClientSession | None):
-        self.aio = aio_session
-        self.curl = None
+    params = {"unique_id": username, "count": "10", "cursor": "0"}
+    async with session.get(TIKWM_POSTS_URL, params=params) as r:
+        status = r.status
+        try:
+            data = await r.json(content_type=None)
+        except Exception:
+            raise ValueError(f"tikwm HTTP {status}, bukan JSON")
+    if not isinstance(data, dict) or data.get("code") != 0:
+        msg = data.get("msg") if isinstance(data, dict) else ""
+        raise ValueError(f"tikwm HTTP {status}: {msg or 'respons tidak dikenal'}")
 
-    @property
-    def engine(self) -> str:
-        return "curl_cffi" if self.curl else "aiohttp"
-
-    async def __aenter__(self):
-        if _CurlSession is not None:
-            self.curl = _CurlSession(impersonate="chrome", timeout=20)
-        return self
-
-    async def __aexit__(self, *exc):
-        if self.curl is not None:
-            try:
-                await self.curl.close()
-            except Exception:
-                pass
-
-    async def get(self, url: str, params: dict | None = None) -> tuple[int, str]:
-        if self.curl is not None:
-            # User-Agent sengaja tidak di-set: biar cocok dengan sidik jari Chrome yang ditiru
-            r = await self.curl.get(url, params=params, headers={
-                "Accept-Language": _HEADERS["Accept-Language"], "Referer": _HEADERS["Referer"]})
-            return r.status_code, r.text
-        async with self.aio.get(url, params=params) as r:
-            return r.status, await r.text()
-
-
-def _valid_ids(raw) -> list[int]:
-    """Saring angka yang memang ID video (timestamp di dalamnya masuk akal), terbaru dulu."""
     now = time.time()
-    ids = {int(i) for i in raw if str(i).isdigit()}
-    return sorted((i for i in ids if 1451606400 <= _video_time(i) <= now + 86400), reverse=True)
+    videos = []
+    for v in (data.get("data") or {}).get("videos") or []:
+        vid = str(v.get("video_id") or v.get("aweme_id") or "")
+        if not vid.isdigit() or not (1451606400 <= _video_time(int(vid)) <= now + 86400):
+            continue
+        author = v.get("author") or {}
+        videos.append({
+            "id": int(vid),
+            "title": (v.get("title") or "").strip(),
+            "cover": v.get("origin_cover") or v.get("cover") or v.get("ai_dynamic_cover"),
+            "create_time": int(v.get("create_time") or _video_time(int(vid))),
+            "nickname": author.get("nickname"),
+            "avatar": author.get("avatar"),
+        })
+    if not videos:
+        raise ValueError(f"tikwm tidak mengembalikan video untuk @{username}")
+    return sorted(videos, key=lambda x: x["id"], reverse=True)
 
 
-async def fetch_latest_video_ids(http: VideoHttp, username: str, sec_uid: str | None = None) -> list[int]:
-    """ID video terbaru dulu, dari halaman embed kreator lalu API item_list. Raise kalau semua gagal."""
-    tried = []
-    for url in (f"https://www.tiktok.com/embed/@{username}",
-                f"https://www.tiktok.com/embed/@{username}?lang=en-US&embedFrom=oembed"):
-        status, html = await http.get(url)
-        ids = _valid_ids(a or b for a, b in _VIDEO_ID_RE.findall(html))
-        if ids:
-            return ids
-        tried.append(f"embed HTTP {status} {len(html)}b")
-    if sec_uid:
-        params = {"aid": "1988", "count": "10", "cursor": "0", "secUid": sec_uid}
-        status, body = await http.get("https://www.tiktok.com/api/post/item_list/", params)
-        try:
-            items = (json.loads(body) or {}).get("itemList") or []
-        except Exception:
-            items = []
-        ids = _valid_ids(it.get("id") for it in items)
-        if ids:
-            return ids
-        tried.append(f"item_list HTTP {status} {len(body)}b")
-    else:
-        tried.append("item_list dilewati (secUid tidak ada)")
-    raise ValueError(" ; ".join(tried))
-
-
-async def fetch_profile(http: VideoHttp, username: str) -> dict:
-    """{'videoCount', 'nickname', 'avatar', 'secUid'} dari halaman profil. Raise kalau gagal."""
-    status, html = await http.get(profile_url(username))
-    m = re.search(r'"videoCount"\s*:\s*"?(\d+)', html)
-    if not m:
-        # Ambil statusCode TikTok dari data halaman supaya alasan gagalnya jelas
-        # (10202 = akun tidak ada, 10221/10222 = akun diblokir/privat, dll.)
-        code = re.search(r'"webapp\.user-detail"\s*:\s*\{[^{}]*?"statusCode"\s*:\s*(-?\d+)', html)
-        hint = f", statusCode TikTok {code.group(1)}" if code else ""
-        raise ValueError(f"videoCount tidak ada (HTTP {status}{hint}, {len(html)} byte: '{_snip(html, 100)}')")
-
-    def _find(key: str) -> str | None:
-        f = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.){{1,300}})"', html)
-        if not f:
-            return None
-        try:
-            return json.loads(f'"{f.group(1)}"')
-        except Exception:
-            return f.group(1)
-
-    return {
-        "videoCount": int(m.group(1)),
-        "nickname": _find("nickname"),
-        "avatar": _find("avatarLarger"),
-        "secUid": _find("secUid"),
-    }
-
-
-async def fetch_oembed(http: VideoHttp, url: str) -> dict:
-    try:
-        status, body = await http.get("https://www.tiktok.com/oembed", {"url": url})
-        return json.loads(body) if status == 200 else {}
-    except Exception:
-        return {}
-
-
-def build_video_message(username: str, video_id: int | None, oembed: dict,
-                        profile: dict | None) -> tuple[str, discord.Embed, discord.ui.View]:
-    profile = profile or {}
-    nickname = profile.get("nickname") or oembed.get("author_name") or username
-    avatar = profile.get("avatar")
-    url = video_url(username, video_id) if video_id else profile_url(username)
-    caption = (oembed.get("title") or "").strip()
+def build_video_message(username: str, video: dict) -> tuple[str, discord.Embed, discord.ui.View]:
+    nickname = video.get("nickname") or username
+    avatar = video.get("avatar")
+    url = video_url(username, video["id"])
+    caption = video.get("title") or ""
     if len(caption) > 300:
         caption = caption[:297] + "..."
 
@@ -319,10 +250,9 @@ def build_video_message(username: str, video_id: int | None, oembed: dict,
     embed.set_author(name=f"{nickname} (@{username})", url=profile_url(username), icon_url=avatar or None)
     if avatar:
         embed.set_thumbnail(url=avatar)
-    if oembed.get("thumbnail_url"):
-        embed.set_image(url=oembed["thumbnail_url"])
-    if video_id:
-        embed.add_field(name="🕒 Diupload", value=f"<t:{_video_time(video_id)}:R>", inline=True)
+    if video.get("cover"):
+        embed.set_image(url=video["cover"])
+    embed.add_field(name="🕒 Diupload", value=f"<t:{video['create_time']}:R>", inline=True)
     embed.set_footer(text="BalikLayar AI • notifikasi video baru otomatis")
 
     view = discord.ui.View(timeout=None)
@@ -416,14 +346,13 @@ class TikTokMonitor:
 
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession(headers=_HEADERS, timeout=timeout) as session:
-            async with VideoHttp(session) as http:
-                for username in config.TIKTOK_USERNAMES:
-                    checks = [(self._check_live, session)] + ([(self._check_video, http)] if do_videos else [])
-                    for check, client in checks:
-                        try:
-                            await check(client, ch, username)
-                        except Exception as e:  # jangan sampai satu error mematikan loop
-                            print(f"⚠️ TikTok monitor {check.__name__} @{username} error: {e}", flush=True)
+            for username in config.TIKTOK_USERNAMES:
+                checks = [self._check_live] + ([self._check_video] if do_videos else [])
+                for check in checks:
+                    try:
+                        await check(session, ch, username)
+                    except Exception as e:  # jangan sampai satu error mematikan loop
+                        print(f"⚠️ TikTok monitor {check.__name__} @{username} error: {e}", flush=True)
 
     async def _report(self, username: str, kind: str, ok: bool, detail: str):
         """Kirim status cek ke #bot-logs saat pertama kali jalan & tiap kali hasilnya berubah (ok <-> gagal)."""
@@ -499,54 +428,26 @@ class TikTokMonitor:
 
     # ---------------- video baru
 
-    async def _check_video(self, http: VideoHttp, ch: discord.TextChannel, username: str):
+    async def _check_video(self, session: aiohttp.ClientSession, ch: discord.TextChannel, username: str):
         acc = self._acc(username)
-        engine = getattr(http, "engine", "?")
-        errors = []
-
-        profile = None
         try:
-            profile = await fetch_profile(http, username)
+            videos = await fetch_latest_videos(session, username)
         except Exception as e:
-            errors.append(f"profil: {e}")
-
-        ids = None
-        try:
-            ids = await fetch_latest_video_ids(http, username, (profile or {}).get("secUid"))
-        except Exception as e:
-            errors.append(f"daftar video: {e}")
-
-        if ids:
-            await self._report(username, "video", True, f"video terbaru {ids[0]} ({engine})")
-            last = acc.get("last_video_id")
-            if last is None:
-                # Pertama kali (atau habis fallback): catat saja, jangan spam video lama
-                acc["last_video_id"] = ids[0]
-            else:
-                new_ids = sorted(i for i in ids if i > last)[-3:]  # maksimal 3 sekaligus, terlama dulu
-                for vid in new_ids:
-                    if time.time() - _video_time(vid) > _MAX_VIDEO_AGE:
-                        continue
-                    oembed = await fetch_oembed(http, video_url(username, vid))
-                    await self._send(ch, *build_video_message(username, vid, oembed, profile))
-                acc["last_video_id"] = max(last, ids[0])
-            if profile:
-                acc["video_count"] = profile["videoCount"]
-            _save_state(self.state)
+            await self._report(username, "video", False, str(e)[:300])
             return
+        newest = videos[0]["id"]
+        await self._report(username, "video", True, f"video terbaru {newest} (tikwm)")
 
-        if profile:
-            # Daftar video tidak didapat -> pakai jumlah video di profil (tanpa link video spesifik)
-            await self._report(username, "video", True,
-                               f"pakai jumlah video ({profile['videoCount']}, {engine}); {errors[-1][:150]}")
-            count = profile["videoCount"]
-            prev = acc.get("video_count")
-            if prev is not None and count > prev:
-                await self._send(ch, *build_video_message(username, None, {}, profile))
-                # Reset ID supaya saat daftar video jalan lagi, video yang sama tidak dinotif dua kali
-                acc.pop("last_video_id", None)
-            acc["video_count"] = count
-            _save_state(self.state)
-            return
-
-        await self._report(username, "video", False, f"[{engine}] " + " | ".join(errors)[:280])
+        last = acc.get("last_video_id")
+        if last is None:
+            # Pertama kali: catat saja, jangan spam video lama
+            acc["last_video_id"] = newest
+        else:
+            fresh = sorted((v for v in videos if v["id"] > last), key=lambda v: v["id"])[-3:]  # maks 3, terlama dulu
+            for v in fresh:
+                if time.time() - v["create_time"] > _MAX_VIDEO_AGE:
+                    continue
+                await self._send(ch, *build_video_message(username, v))
+            acc["last_video_id"] = max(last, newest)
+        acc.pop("video_count", None)
+        _save_state(self.state)
