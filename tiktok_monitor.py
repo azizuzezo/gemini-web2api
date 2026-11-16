@@ -55,42 +55,97 @@ LAST_ERROR = ""
 _STATUS_OFFLINE = 4  # liveRoom.status: 2 = live, 4 = offline (sama seperti tiktok-live-connector)
 
 
-async def _status_from_html(session: aiohttp.ClientSession) -> int | None:
+async def _info_from_html(session: aiohttp.ClientSession) -> dict:
     async with session.get(LIVE_URL) as r:
         html = await r.text()
     m = _SIGI_RE.search(html)
     if not m:
         raise ValueError(f"SIGI_STATE tidak ada (HTTP {r.status}, mungkin diblok/captcha)")
-    info = (json.loads(m.group(1)).get("LiveRoom") or {}).get("liveRoomUserInfo") or {}
-    return (info.get("liveRoom") or {}).get("status")
+    return (json.loads(m.group(1)).get("LiveRoom") or {}).get("liveRoomUserInfo") or {}
 
 
-async def _status_from_api(session: aiohttp.ClientSession) -> int | None:
+async def _info_from_api(session: aiohttp.ClientSession) -> dict:
     params = {"aid": "1988", "sourceType": "54", "uniqueId": config.TIKTOK_USERNAME}
     async with session.get("https://www.tiktok.com/api-live/user/room/", params=params) as r:
         data = await r.json(content_type=None)
     if data.get("statusCode"):
         raise ValueError(f"API error {data.get('statusCode')} {data.get('message', '')}")
-    return ((data.get("data") or {}).get("liveRoom") or {}).get("status")
+    return data.get("data") or {}
 
 
-async def check_live() -> bool | None:
-    """True = sedang live, False = tidak live, None = gagal cek."""
+async def fetch_live() -> tuple[bool | None, dict]:
+    """(True/False/None, info). info = liveRoomUserInfo: {user: {...}, liveRoom: {...}}."""
     errors = []
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(headers=_HEADERS, timeout=timeout) as session:
-        for source in (_status_from_html, _status_from_api):
+        for source in (_info_from_html, _info_from_api):
             try:
-                status = await source(session)
+                info = await source(session)
+                status = (info.get("liveRoom") or {}).get("status")
                 if status is not None:
-                    return status != _STATUS_OFFLINE
+                    return status != _STATUS_OFFLINE, info
                 errors.append(f"{source.__name__}: status kosong")
             except Exception as e:
                 errors.append(f"{source.__name__}: {e}")
     global LAST_ERROR
     LAST_ERROR = " | ".join(errors)[:300]
     print(f"⚠️ TikTok live check gagal: {LAST_ERROR}", flush=True)
-    return None
+    return None, {}
+
+
+async def check_live() -> bool | None:
+    """True = sedang live, False = tidak live, None = gagal cek."""
+    return (await fetch_live())[0]
+
+
+NOTIF_VERSION = 2  # naikkan kalau tampilan notif diubah -> live yang sedang jalan dikirim ulang sekali
+
+
+def build_live_message(info: dict) -> tuple[str, discord.Embed, discord.ui.View]:
+    user = info.get("user") or {}
+    room = info.get("liveRoom") or {}
+    stats = room.get("liveRoomStats") or {}
+    nickname = user.get("nickname") or config.TIKTOK_USERNAME
+    avatar = user.get("avatarLarger") or user.get("avatarMedium") or user.get("avatarThumb")
+    room_title = (room.get("title") or "").strip()
+    cover = room.get("coverUrl") or room.get("squareCoverImg")
+    viewers = stats.get("userCount")
+    started = room.get("startTime")
+
+    content = (
+        f"🔴 **{nickname} lagi live sekarang!**\n"
+        f"Yuk mampir, ngobrol bareng & tanya-tanya langsung soal konten AI dan affiliate 👇"
+    )
+    embed = discord.Embed(
+        title=f"🎥 {room_title}" if room_title else "🎥 Lagi live di TikTok, gas gabung!",
+        url=LIVE_URL,
+        description=(
+            "Selagi masih live, ini kesempatan buat:\n"
+            "💬 tanya langsung & dapat jawaban real-time\n"
+            "💡 intip strategi & tools yang lagi dipakai\n"
+            "🤝 kenalan sama sesama kreator BalikLayar\n\n"
+            f"**[👉 Klik di sini buat masuk live]({LIVE_URL})**"
+        ),
+        color=0xFE2C55,
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_author(name=f"{nickname} (@{config.TIKTOK_USERNAME})", url=PROFILE_URL, icon_url=avatar or None)
+    if avatar:
+        embed.set_thumbnail(url=avatar)
+    if cover:
+        embed.set_image(url=cover)
+    if viewers:
+        embed.add_field(name="👀 Lagi nonton", value=f"**{viewers:,}** orang".replace(",", "."), inline=True)
+    if started:
+        embed.add_field(name="⏱️ Mulai live", value=f"<t:{int(started)}:R>", inline=True)
+    embed.set_footer(text="BalikLayar AI • notifikasi live otomatis")
+
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label="Tonton live sekarang", emoji="🔴", url=LIVE_URL))
+    view.add_item(discord.ui.Button(label="Follow TikTok", emoji="➕", url=PROFILE_URL))
+    if config.TIKTOK_PING_EVERYONE:
+        content = "@everyone " + content
+    return content, embed, view
 
 
 class TikTokMonitor:
@@ -185,7 +240,7 @@ class TikTokMonitor:
                 print(f"⚠️ Gagal kirim ke bot-logs: {e}", flush=True)
 
     async def _check_live(self, ch: discord.TextChannel):
-        live = await check_live()
+        live, info = await fetch_live()
         await self._report(live)
         if live is None:
             # Kalau cek gagal terus (~30 menit), anggap tidak live agar live berikutnya tetap dinotif
@@ -197,15 +252,28 @@ class TikTokMonitor:
             return
         self.fail_count = 0
         was_live = self.state.get("is_live", False)
-        if live and not was_live:
-            embed = discord.Embed(
-                title=f"🔴 @{config.TIKTOK_USERNAME} sedang LIVE di TikTok!",
-                description=f"Gabung sekarang: {LIVE_URL}",
-                url=LIVE_URL,
-                color=0xFF0050,
-            )
-            await ch.send("@everyone" if config.TIKTOK_PING_EVERYONE else None, embed=embed,
-                          allowed_mentions=discord.AllowedMentions(everyone=config.TIKTOK_PING_EVERYONE))
+        resend = live and was_live and self.state.get("notif_version") != NOTIF_VERSION
+        if live and (not was_live or resend):
+            if resend:
+                await self._delete_old_notif(ch)
+            content, embed, view = build_live_message(info)
+            msg = await ch.send(content, embed=embed, view=view,
+                                allowed_mentions=discord.AllowedMentions(everyone=config.TIKTOK_PING_EVERYONE))
+            self.state["notif_version"] = NOTIF_VERSION
+            self.state["last_message_id"] = msg.id
+            _save_state(self.state)
         if live != was_live:
             self.state["is_live"] = live
             _save_state(self.state)
+
+    async def _delete_old_notif(self, ch: discord.TextChannel):
+        """Hapus notif live lama (versi tampilan sebelumnya) supaya tidak dobel saat dikirim ulang."""
+        try:
+            async for m in ch.history(limit=10):
+                if m.author.id == self.bot.user.id and any(
+                    (e.title or "").endswith("sedang LIVE di TikTok!") for e in m.embeds
+                ):
+                    await m.delete()
+                    break
+        except Exception as e:
+            print(f"⚠️ Gagal hapus notif lama: {e}", flush=True)
