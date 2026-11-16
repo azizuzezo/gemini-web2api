@@ -23,10 +23,15 @@ CHANNEL_STAFF_CMD = int(os.getenv("DISCORD_CHANNEL_STAFF_CMD", 15689102711734928
 # ==========================================
 # TIKTOK MONITOR (LIVE + VIDEO BARU)
 # ==========================================
-TIKTOK_USERNAME = os.getenv("TIKTOK_USERNAME", "alfiqojundullah")
+# Akun yang dipantau (pisahkan dengan koma). Notif LIVE & video baru semuanya ke CHANNEL_TIKTOK.
+TIKTOK_USERNAMES = [u.strip().lstrip("@") for u in os.getenv(
+    "TIKTOK_USERNAMES", "alfiqojundullah,baliklayarid.official,airawidjaja"
+).split(",") if u.strip()]
+TIKTOK_USERNAME = TIKTOK_USERNAMES[0]  # kompatibilitas kode lama
 # ID channel notifikasi TikTok (read-only). Set 0 agar bot membuat channel baru otomatis
 CHANNEL_TIKTOK = int(os.getenv("DISCORD_CHANNEL_TIKTOK", 1568308183187853355))  # ┃・🎬・tiktok-alfiqo
 TIKTOK_POLL_SECONDS = int(os.getenv("TIKTOK_POLL_SECONDS", 120))
+TIKTOK_VIDEO_POLL_SECONDS = int(os.getenv("TIKTOK_VIDEO_POLL_SECONDS", 300))  # cek video baru tiap 5 menit
 TIKTOK_PING_EVERYONE = os.getenv("TIKTOK_PING_EVERYONE", "1") == "1"  # set "0" untuk matikan @everyone
 
 # Verifikasi: umur akun Discord minimal (hari) agar bisa verifikasi
