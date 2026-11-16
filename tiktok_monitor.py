@@ -41,7 +41,7 @@ def _save_state(state: dict) -> None:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"❌ Gagal menyimpan tiktok_state.json: {e}")
+        print(f"❌ Gagal menyimpan tiktok_state.json: {e}", flush=True)
 
 
 _HEADERS = {
@@ -51,6 +51,7 @@ _HEADERS = {
     "Referer": "https://www.tiktok.com/",
 }
 _SIGI_RE = re.compile(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', re.S)
+LAST_ERROR = ""
 _STATUS_OFFLINE = 4  # liveRoom.status: 2 = live, 4 = offline (sama seperti tiktok-live-connector)
 
 
@@ -86,7 +87,9 @@ async def check_live() -> bool | None:
                 errors.append(f"{source.__name__}: status kosong")
             except Exception as e:
                 errors.append(f"{source.__name__}: {e}")
-    print(f"⚠️ TikTok live check gagal: {' | '.join(errors)[:300]}")
+    global LAST_ERROR
+    LAST_ERROR = " | ".join(errors)[:300]
+    print(f"⚠️ TikTok live check gagal: {LAST_ERROR}", flush=True)
     return None
 
 
@@ -142,11 +145,11 @@ class TikTokMonitor:
                 reason="Channel read-only notifikasi TikTok",
             )
         except Exception as e:
-            print(f"❌ Gagal membuat channel TikTok: {e}")
+            print(f"❌ Gagal membuat channel TikTok: {e}", flush=True)
             return None
         self.state["channel_id"] = ch.id
         _save_state(self.state)
-        print(f"✅ Channel TikTok dibuat: #{ch.name} ({ch.id})")
+        print(f"✅ Channel TikTok dibuat: #{ch.name} ({ch.id})", flush=True)
         return ch
 
     async def _tick(self):
@@ -161,10 +164,29 @@ class TikTokMonitor:
             try:
                 await check(ch)
             except Exception as e:  # jangan sampai satu error mematikan loop
-                print(f"⚠️ TikTok monitor {check.__name__} error: {e}")
+                print(f"⚠️ TikTok monitor {check.__name__} error: {e}", flush=True)
+
+    async def _report(self, live: bool | None):
+        """Kirim status cek ke #bot-logs saat pertama kali jalan & tiap kali hasilnya berubah (ok <-> gagal)."""
+        outcome = "fail" if live is None else "ok"
+        if outcome == getattr(self, "last_outcome", None):
+            return
+        self.last_outcome = outcome
+        if live is None:
+            msg = f"⚠️ TikTok live check @{config.TIKTOK_USERNAME} GAGAL: `{LAST_ERROR}`"
+        else:
+            msg = f"✅ TikTok live check @{config.TIKTOK_USERNAME} jalan: {'🔴 sedang LIVE' if live else 'tidak live'}"
+        print(msg, flush=True)
+        logs = self.bot.get_channel(config.CHANNEL_LOGS)
+        if logs:
+            try:
+                await logs.send(msg)
+            except Exception as e:
+                print(f"⚠️ Gagal kirim ke bot-logs: {e}", flush=True)
 
     async def _check_live(self, ch: discord.TextChannel):
         live = await check_live()
+        await self._report(live)
         if live is None:
             # Kalau cek gagal terus (~30 menit), anggap tidak live agar live berikutnya tetap dinotif
             # (mencegah is_live nyangkut True selamanya).
