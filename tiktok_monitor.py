@@ -180,18 +180,27 @@ def _video_time(video_id: int) -> int:
     return int(video_id) >> 32
 
 
+def _snip(html: str, n: int = 160) -> str:
+    """Potongan awal halaman (untuk diagnosa di #bot-logs)."""
+    return re.sub(r"\s+", " ", html[:n]).replace("`", "'")
+
+
 async def fetch_latest_video_ids(session: aiohttp.ClientSession, username: str) -> list[int]:
     """ID video dari halaman embed kreator, terbaru dulu. Raise kalau gagal/diblok."""
-    async with session.get(f"https://www.tiktok.com/embed/@{username}") as r:
-        html = await r.text()
-        status = r.status
-    ids = {int(a or b) for a, b in _VIDEO_ID_RE.findall(html)}
-    # Buang angka yang bukan ID video (timestamp-nya harus masuk akal: setelah 2016, tidak di masa depan)
-    now = time.time()
-    ids = {i for i in ids if 1451606400 <= _video_time(i) <= now + 86400}
-    if not ids:
-        raise ValueError(f"embed tidak berisi ID video (HTTP {status}, mungkin diblok)")
-    return sorted(ids, reverse=True)
+    tried = []
+    for url in (f"https://www.tiktok.com/embed/@{username}",
+                f"https://www.tiktok.com/embed/@{username}?lang=en-US&embedFrom=oembed"):
+        async with session.get(url) as r:
+            html = await r.text()
+            status = r.status
+        ids = {int(a or b) for a, b in _VIDEO_ID_RE.findall(html)}
+        # Buang angka yang bukan ID video (timestamp-nya harus masuk akal: setelah 2016, tidak di masa depan)
+        now = time.time()
+        ids = {i for i in ids if 1451606400 <= _video_time(i) <= now + 86400}
+        if ids:
+            return sorted(ids, reverse=True)
+        tried.append(f"HTTP {status} {len(html)}b '{_snip(html, 100)}'")
+    raise ValueError("embed tanpa ID video: " + " ; ".join(tried))
 
 
 async def fetch_profile(session: aiohttp.ClientSession, username: str) -> dict:
@@ -208,7 +217,7 @@ async def fetch_profile(session: aiohttp.ClientSession, username: str) -> dict:
             code = re.search(r'"statusCode"\s*:\s*(-?\d+)', html)
         hint = f", statusCode TikTok {code.group(1)}" if code else ""
         captcha = ", halaman captcha" if "captcha" in html.lower()[:20000] else ""
-        raise ValueError(f"videoCount tidak ada di profil (HTTP {status}{hint}{captcha}, {len(html)} byte)")
+        raise ValueError(f"videoCount tidak ada di profil (HTTP {status}{hint}{captcha}, {len(html)} byte: '{_snip(html)}')")
     nick = re.search(r'"nickname"\s*:\s*"([^"]{1,80})"', html)
     avatar = re.search(r'"avatarLarger"\s*:\s*"([^"]+)"', html)
 
@@ -223,6 +232,24 @@ async def fetch_profile(session: aiohttp.ClientSession, username: str) -> dict:
         "nickname": _unescape(nick.group(1)) if nick else None,
         "avatar": _unescape(avatar.group(1)) if avatar else None,
     }
+
+
+async def fetch_profile_via_live(session: aiohttp.ClientSession, username: str) -> dict:
+    """Cadangan fetch_profile: cari videoCount di data endpoint live (yang tidak diblok)."""
+    errors = []
+    for source in (_live_info_from_api, _live_info_from_html):
+        try:
+            info = await source(session, username)
+        except Exception as e:
+            errors.append(f"{source.__name__}: {e}")
+            continue
+        m = re.search(r'"videoCount"\s*:\s*"?(\d+)', json.dumps(info))
+        if m:
+            user = info.get("user") or {}
+            return {"videoCount": int(m.group(1)), "nickname": user.get("nickname"),
+                    "avatar": user.get("avatarLarger") or user.get("avatarMedium")}
+        errors.append(f"{source.__name__}: tidak ada videoCount (keys: {','.join(sorted(info))[:80]})")
+    raise ValueError("; ".join(errors))
 
 
 async def fetch_oembed(session: aiohttp.ClientSession, url: str) -> dict:
@@ -450,6 +477,10 @@ class TikTokMonitor:
             profile = await fetch_profile(session, username)
         except Exception as e:
             errors.append(f"profil: {e}")
+            try:
+                profile = await fetch_profile_via_live(session, username)
+            except Exception as e2:
+                errors.append(f"live-data: {e2}")
 
         ids = None
         try:
