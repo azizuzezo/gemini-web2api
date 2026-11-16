@@ -98,7 +98,7 @@ async def check_live() -> bool | None:
     return (await fetch_live())[0]
 
 
-NOTIF_VERSION = 2  # naikkan kalau tampilan notif diubah -> live yang sedang jalan dikirim ulang sekali
+NOTIF_VERSION = 3  # naikkan kalau tampilan notif diubah -> live yang sedang jalan dikirim ulang sekali
 
 
 def build_live_message(info: dict) -> tuple[str, discord.Embed, discord.ui.View]:
@@ -268,6 +268,13 @@ class TikTokMonitor:
 
     async def _delete_old_notif(self, ch: discord.TextChannel):
         """Hapus notif live lama (versi tampilan sebelumnya) supaya tidak dobel saat dikirim ulang."""
+        last_id = self.state.get("last_message_id")
+        if last_id:
+            try:
+                await (await ch.fetch_message(last_id)).delete()
+                return
+            except Exception:
+                pass
         try:
             async for m in ch.history(limit=10):
                 if m.author.id == self.bot.user.id and any(
