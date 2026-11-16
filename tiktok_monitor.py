@@ -22,6 +22,11 @@ import time
 
 import aiohttp
 
+try:  # Meniru TLS/HTTP2 Chrome supaya halaman profil TikTok tidak diganti halaman anti-bot
+    from curl_cffi.requests import AsyncSession as _CurlSession
+except Exception:  # curl_cffi belum terpasang -> cek video pakai aiohttp (kemungkinan diblok)
+    _CurlSession = None
+
 import discord
 from discord.ext import tasks
 
@@ -185,79 +190,104 @@ def _snip(html: str, n: int = 160) -> str:
     return re.sub(r"\s+", " ", html[:n]).replace("`", "'")
 
 
-async def fetch_latest_video_ids(session: aiohttp.ClientSession, username: str) -> list[int]:
-    """ID video dari halaman embed kreator, terbaru dulu. Raise kalau gagal/diblok."""
+class VideoHttp:
+    """GET untuk cek video baru: curl_cffi (meniru Chrome) kalau terpasang, kalau tidak aiohttp."""
+
+    def __init__(self, aio_session: aiohttp.ClientSession | None):
+        self.aio = aio_session
+        self.curl = None
+
+    @property
+    def engine(self) -> str:
+        return "curl_cffi" if self.curl else "aiohttp"
+
+    async def __aenter__(self):
+        if _CurlSession is not None:
+            self.curl = _CurlSession(impersonate="chrome", timeout=20)
+        return self
+
+    async def __aexit__(self, *exc):
+        if self.curl is not None:
+            try:
+                await self.curl.close()
+            except Exception:
+                pass
+
+    async def get(self, url: str, params: dict | None = None) -> tuple[int, str]:
+        if self.curl is not None:
+            # User-Agent sengaja tidak di-set: biar cocok dengan sidik jari Chrome yang ditiru
+            r = await self.curl.get(url, params=params, headers={
+                "Accept-Language": _HEADERS["Accept-Language"], "Referer": _HEADERS["Referer"]})
+            return r.status_code, r.text
+        async with self.aio.get(url, params=params) as r:
+            return r.status, await r.text()
+
+
+def _valid_ids(raw) -> list[int]:
+    """Saring angka yang memang ID video (timestamp di dalamnya masuk akal), terbaru dulu."""
+    now = time.time()
+    ids = {int(i) for i in raw if str(i).isdigit()}
+    return sorted((i for i in ids if 1451606400 <= _video_time(i) <= now + 86400), reverse=True)
+
+
+async def fetch_latest_video_ids(http: VideoHttp, username: str, sec_uid: str | None = None) -> list[int]:
+    """ID video terbaru dulu, dari halaman embed kreator lalu API item_list. Raise kalau semua gagal."""
     tried = []
     for url in (f"https://www.tiktok.com/embed/@{username}",
                 f"https://www.tiktok.com/embed/@{username}?lang=en-US&embedFrom=oembed"):
-        async with session.get(url) as r:
-            html = await r.text()
-            status = r.status
-        ids = {int(a or b) for a, b in _VIDEO_ID_RE.findall(html)}
-        # Buang angka yang bukan ID video (timestamp-nya harus masuk akal: setelah 2016, tidak di masa depan)
-        now = time.time()
-        ids = {i for i in ids if 1451606400 <= _video_time(i) <= now + 86400}
+        status, html = await http.get(url)
+        ids = _valid_ids(a or b for a, b in _VIDEO_ID_RE.findall(html))
         if ids:
-            return sorted(ids, reverse=True)
-        tried.append(f"HTTP {status} {len(html)}b '{_snip(html, 100)}'")
-    raise ValueError("embed tanpa ID video: " + " ; ".join(tried))
+            return ids
+        tried.append(f"embed HTTP {status} {len(html)}b")
+    if sec_uid:
+        params = {"aid": "1988", "count": "10", "cursor": "0", "secUid": sec_uid}
+        status, body = await http.get("https://www.tiktok.com/api/post/item_list/", params)
+        try:
+            items = (json.loads(body) or {}).get("itemList") or []
+        except Exception:
+            items = []
+        ids = _valid_ids(it.get("id") for it in items)
+        if ids:
+            return ids
+        tried.append(f"item_list HTTP {status} {len(body)}b")
+    else:
+        tried.append("item_list dilewati (secUid tidak ada)")
+    raise ValueError(" ; ".join(tried))
 
 
-async def fetch_profile(session: aiohttp.ClientSession, username: str) -> dict:
-    """{'videoCount', 'nickname', 'avatar'} dari halaman profil. Raise kalau gagal."""
-    async with session.get(profile_url(username)) as r:
-        html = await r.text()
-        status = r.status
+async def fetch_profile(http: VideoHttp, username: str) -> dict:
+    """{'videoCount', 'nickname', 'avatar', 'secUid'} dari halaman profil. Raise kalau gagal."""
+    status, html = await http.get(profile_url(username))
     m = re.search(r'"videoCount"\s*:\s*"?(\d+)', html)
     if not m:
         # Ambil statusCode TikTok dari data halaman supaya alasan gagalnya jelas
         # (10202 = akun tidak ada, 10221/10222 = akun diblokir/privat, dll.)
         code = re.search(r'"webapp\.user-detail"\s*:\s*\{[^{}]*?"statusCode"\s*:\s*(-?\d+)', html)
-        if not code:
-            code = re.search(r'"statusCode"\s*:\s*(-?\d+)', html)
         hint = f", statusCode TikTok {code.group(1)}" if code else ""
-        captcha = ", halaman captcha" if "captcha" in html.lower()[:20000] else ""
-        raise ValueError(f"videoCount tidak ada di profil (HTTP {status}{hint}{captcha}, {len(html)} byte: '{_snip(html)}')")
-    nick = re.search(r'"nickname"\s*:\s*"([^"]{1,80})"', html)
-    avatar = re.search(r'"avatarLarger"\s*:\s*"([^"]+)"', html)
+        raise ValueError(f"videoCount tidak ada (HTTP {status}{hint}, {len(html)} byte: '{_snip(html, 100)}')")
 
-    def _unescape(s: str) -> str:
+    def _find(key: str) -> str | None:
+        f = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.){{1,300}})"', html)
+        if not f:
+            return None
         try:
-            return json.loads(f'"{s}"')
+            return json.loads(f'"{f.group(1)}"')
         except Exception:
-            return s
+            return f.group(1)
 
     return {
         "videoCount": int(m.group(1)),
-        "nickname": _unescape(nick.group(1)) if nick else None,
-        "avatar": _unescape(avatar.group(1)) if avatar else None,
+        "nickname": _find("nickname"),
+        "avatar": _find("avatarLarger"),
+        "secUid": _find("secUid"),
     }
 
 
-async def fetch_profile_via_live(session: aiohttp.ClientSession, username: str) -> dict:
-    """Cadangan fetch_profile: cari videoCount di data endpoint live (yang tidak diblok)."""
-    errors = []
-    for source in (_live_info_from_api, _live_info_from_html):
-        try:
-            info = await source(session, username)
-        except Exception as e:
-            errors.append(f"{source.__name__}: {e}")
-            continue
-        m = re.search(r'"videoCount"\s*:\s*"?(\d+)', json.dumps(info))
-        if m:
-            user = info.get("user") or {}
-            return {"videoCount": int(m.group(1)), "nickname": user.get("nickname"),
-                    "avatar": user.get("avatarLarger") or user.get("avatarMedium")}
-        errors.append(f"{source.__name__}: tidak ada videoCount (keys: {','.join(sorted(info))[:80]})")
-    raise ValueError("; ".join(errors))
-
-
-async def fetch_oembed(session: aiohttp.ClientSession, url: str) -> dict:
+async def fetch_oembed(http: VideoHttp, url: str) -> dict:
     try:
-        async with session.get("https://www.tiktok.com/oembed", params={"url": url}) as r:
-            if r.status != 200:
-                return {}
-            return await r.json(content_type=None)
+        status, body = await http.get("https://www.tiktok.com/oembed", {"url": url})
+        return json.loads(body) if status == 200 else {}
     except Exception:
         return {}
 
@@ -386,13 +416,14 @@ class TikTokMonitor:
 
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession(headers=_HEADERS, timeout=timeout) as session:
-            for username in config.TIKTOK_USERNAMES:
-                checks = [self._check_live] + ([self._check_video] if do_videos else [])
-                for check in checks:
-                    try:
-                        await check(session, ch, username)
-                    except Exception as e:  # jangan sampai satu error mematikan loop
-                        print(f"⚠️ TikTok monitor {check.__name__} @{username} error: {e}", flush=True)
+            async with VideoHttp(session) as http:
+                for username in config.TIKTOK_USERNAMES:
+                    checks = [(self._check_live, session)] + ([(self._check_video, http)] if do_videos else [])
+                    for check, client in checks:
+                        try:
+                            await check(client, ch, username)
+                        except Exception as e:  # jangan sampai satu error mematikan loop
+                            print(f"⚠️ TikTok monitor {check.__name__} @{username} error: {e}", flush=True)
 
     async def _report(self, username: str, kind: str, ok: bool, detail: str):
         """Kirim status cek ke #bot-logs saat pertama kali jalan & tiap kali hasilnya berubah (ok <-> gagal)."""
@@ -468,28 +499,25 @@ class TikTokMonitor:
 
     # ---------------- video baru
 
-    async def _check_video(self, session: aiohttp.ClientSession, ch: discord.TextChannel, username: str):
+    async def _check_video(self, http: VideoHttp, ch: discord.TextChannel, username: str):
         acc = self._acc(username)
+        engine = getattr(http, "engine", "?")
         errors = []
 
         profile = None
         try:
-            profile = await fetch_profile(session, username)
+            profile = await fetch_profile(http, username)
         except Exception as e:
             errors.append(f"profil: {e}")
-            try:
-                profile = await fetch_profile_via_live(session, username)
-            except Exception as e2:
-                errors.append(f"live-data: {e2}")
 
         ids = None
         try:
-            ids = await fetch_latest_video_ids(session, username)
+            ids = await fetch_latest_video_ids(http, username, (profile or {}).get("secUid"))
         except Exception as e:
-            errors.append(f"embed: {e}")
+            errors.append(f"daftar video: {e}")
 
         if ids:
-            await self._report(username, "video", True, f"video terbaru {ids[0]}")
+            await self._report(username, "video", True, f"video terbaru {ids[0]} ({engine})")
             last = acc.get("last_video_id")
             if last is None:
                 # Pertama kali (atau habis fallback): catat saja, jangan spam video lama
@@ -499,7 +527,7 @@ class TikTokMonitor:
                 for vid in new_ids:
                     if time.time() - _video_time(vid) > _MAX_VIDEO_AGE:
                         continue
-                    oembed = await fetch_oembed(session, video_url(username, vid))
+                    oembed = await fetch_oembed(http, video_url(username, vid))
                     await self._send(ch, *build_video_message(username, vid, oembed, profile))
                 acc["last_video_id"] = max(last, ids[0])
             if profile:
@@ -508,17 +536,17 @@ class TikTokMonitor:
             return
 
         if profile:
-            # Embed diblok -> fallback pakai jumlah video di profil (tanpa link video spesifik)
+            # Daftar video tidak didapat -> pakai jumlah video di profil (tanpa link video spesifik)
             await self._report(username, "video", True,
-                               f"pakai jumlah video ({profile['videoCount']}), embed gagal: {errors[-1]}")
+                               f"pakai jumlah video ({profile['videoCount']}, {engine}); {errors[-1][:150]}")
             count = profile["videoCount"]
             prev = acc.get("video_count")
             if prev is not None and count > prev:
                 await self._send(ch, *build_video_message(username, None, {}, profile))
-                # Reset ID supaya saat embed jalan lagi, video yang sama tidak dinotif dua kali
+                # Reset ID supaya saat daftar video jalan lagi, video yang sama tidak dinotif dua kali
                 acc.pop("last_video_id", None)
             acc["video_count"] = count
             _save_state(self.state)
             return
 
-        await self._report(username, "video", False, " | ".join(errors)[:300])
+        await self._report(username, "video", False, f"[{engine}] " + " | ".join(errors)[:280])
